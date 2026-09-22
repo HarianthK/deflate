@@ -1,0 +1,3 @@
+*.gz
+sample.bin
+__pycache__/
