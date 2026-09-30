@@ -66,21 +66,30 @@ def lz77(data):
             chain.insert(0, pos)
             del chain[16:]  # the 16 most recent starts; older ones rarely win
 
-    while i < len(data):
+    def longest(at):
         best_len, best_dist = 0, 0
-        key = bytes(data[i:i + MIN_MATCH])
-        for candidate in heads.get(key, ()):
-            dist = i - candidate
+        for candidate in heads.get(bytes(data[at:at + MIN_MATCH]), ()):
+            dist = at - candidate
             if dist > WINDOW:
                 break
             length = 0
-            while length < MAX_MATCH and i + length < len(data) and data[candidate + length] == data[i + length]:
+            while length < MAX_MATCH and at + length < len(data) and data[candidate + length] == data[at + length]:
                 length += 1
             if length > best_len:
                 best_len, best_dist = length, dist
                 if length == MAX_MATCH:
                     break
+        return best_len, best_dist
+
+    while i < len(data):
+        best_len, best_dist = longest(i)
         remember(i)
+        # Lazy matching, as gzip does: if a match starting one byte later is longer, emit
+        # this byte as a literal and take that one instead.
+        if MIN_MATCH <= best_len < MAX_MATCH and longest(i + 1)[0] > best_len:
+            tokens.append(data[i])
+            i += 1
+            continue
         if best_len >= MIN_MATCH:
             tokens.append((best_len, best_dist))
             for j in range(i + 1, i + best_len):

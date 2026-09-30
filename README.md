@@ -30,15 +30,16 @@ programs read them back. Sizes against `gzip -9`:
 
 | input | ours | gzip -9 |
 | --- | --- | --- |
-| 9 KB of repeated English | 111 | 108 |
-| its own source, twice | 4588 | 4463 |
-| 70 KB of one repeated byte | 108 | 103 |
-| 20 KB of random bytes | 20029 | 20028 |
+| 9 KB of repeated English | 102 | 108 |
+| 70 KB of one repeated byte | 102 | 103 |
+| 20 KB of random bytes | 20023 | 20028 |
 | empty, and one byte | 20, 21 | 20, 21 |
+| ember's DOCS.md, 21 KB of prose | 8843 | 8731 |
+| ember's vm.rs, 36 KB of Rust | 8064 | 7854 |
 
-Within a few percent everywhere. The gap is lazy matching: gzip checks
-whether starting a match one byte later would pay better, and this takes the
-first match it finds.
+Level with gzip or smaller on repetitive input, and within one to three percent
+on real text, where gzip's longer hash chains still find a few more matches.
+Lazy matching, below, closed most of the gap that was there.
 
 ## Running it
 

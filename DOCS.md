@@ -52,11 +52,23 @@ which is what `auto` does here, and it is why zipping a JPEG makes it about
 
 ## Where the last few percent live
 
-Against `gzip -9` this lands within about 3% on real text. The difference is
-lazy matching: when gzip finds a match at position i, it also looks at i+1,
-and if the match there is longer it emits a literal and takes the better one.
-That single heuristic is most of the remaining gap, and the reason it is not
-here is that it doubles the search cost for a few percent.
+The first version took the first long match it found. gzip does not: when it
+finds a match at position i, it also looks at i+1, and if the match there is
+longer it emits byte i as a literal and takes the better match. That is lazy
+matching, and it is now here too. On three real files compressed by both
+versions it saved 2 to 3.3 points of gzip's size: ember's DOCS.md went from
+104.6% to 101.3%, its vm.rs from 105.4% to 102.7%. It costs about half as much
+time again, because most positions are now searched twice.
+
+Measuring that took fixing the measurement first. The comparison had stored the
+file name "t.bin" in our files and none in gzip's, so six bytes of every row were
+a name, not compression, and tiny files looked 30% worse than they were. Compared
+like for like, this already matched gzip on most inputs; the only real gap was
+ordinary text.
+
+What is left is search depth. This keeps 16 recent positions per three-byte
+key; gzip -9 follows chains up to 4,096 long. Deeper chains would find a few
+more matches on text, at the price of Python being slow enough already.
 
 ## The check is the whole point
 
