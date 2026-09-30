@@ -42,8 +42,11 @@ for label, data in CASES.items():
             failures += 1
     theirs = len(gzip.compress(data, 9))
     assert sizes["auto"] == min(sizes.values()), f"{label}: auto picked {sizes['auto']}, best was {min(sizes.values())}"
-    print(f"{label:18} {len(data):>7} bytes -> ours {sizes['auto']:>7}  gzip -9 {theirs:>7}  "
-          f"({100 * sizes['auto'] / theirs:.0f}% of theirs)")
+    # Compared without a stored file name, as gzip.compress writes none; with it, six bytes
+    # of every row were the name "t.bin", not compression.
+    ours = len(deflate.gzip_bytes(data))
+    print(f"{label:18} {len(data):>7} bytes -> ours {ours:>7}  gzip -9 {theirs:>7}  "
+          f"({100 * ours / theirs:.0f}% of theirs)")
 
 # The real gzip program, if it is installed, is the strictest reader there is.
 sample = CASES["english"] + CASES["own source"]
