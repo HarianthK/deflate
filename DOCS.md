@@ -66,9 +66,27 @@ a name, not compression, and tiny files looked 30% worse than they were. Compare
 like for like, this already matched gzip on most inputs; the only real gap was
 ordinary text.
 
-What is left is search depth. This keeps 16 recent positions per three-byte
-key; gzip -9 follows chains up to 4,096 long. Deeper chains would find a few
-more matches on text, at the price of Python being slow enough already.
+### How deep to search
+
+Each three-byte key remembers a number of the most recent places it occurred,
+and only those are tried as match starts. gzip -9 follows up to 4,096. This used
+16, and the notes guessed that the depth was what was left of the gap. Measured on
+three real files, size as a share of gzip -9's and total time:
+
+| depth | ember DOCS.md | ember vm.rs | deflate.py | time |
+| --- | --- | --- | --- | --- |
+| 16 | 101.4% | 102.6% | 100.8% | 0.75s |
+| 64 | 100.3% | 101.2% | 100.4% | 1.29s |
+| 256 | 100.2% | 101.1% | 100.4% | 1.62s |
+| 1,024 | 100.2% | 100.9% | 100.3% | 2.59s |
+
+Sixty-four keeps nearly all of the gain for 1.7 times the time; past that, each
+step costs more time for a tenth of a percent, so it is 64 now. And even at
+1,024 the gap does not close, which says the rest is not depth at all. The likely
+cause is block splitting: gzip ends a block and starts a new one, with new code
+tables, when the statistics of the text change, where this writes one block with
+one set of tables for the whole file. That is the next thing to measure, not a
+finding.
 
 ## The check is the whole point
 

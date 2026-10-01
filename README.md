@@ -34,10 +34,10 @@ programs read them back. Sizes against `gzip -9`:
 | 70 KB of one repeated byte | 102 | 103 |
 | 20 KB of random bytes | 20023 | 20028 |
 | empty, and one byte | 20, 21 | 20, 21 |
-| ember's DOCS.md, 21 KB of prose | 8843 | 8731 |
-| ember's vm.rs, 36 KB of Rust | 8064 | 7854 |
+| ember's DOCS.md, 22 KB of prose | 9334 | 9302 |
+| ember's vm.rs, 36 KB of Rust | 8288 | 8189 |
 
-Level with gzip or smaller on repetitive input, and within one to three percent
+Level with gzip or smaller on repetitive input, and within about one percent
 on real text, where gzip's longer hash chains still find a few more matches.
 Lazy matching, below, closed most of the gap that was there.
 

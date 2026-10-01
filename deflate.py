@@ -8,6 +8,8 @@ from collections import Counter
 
 WINDOW = 32768
 MIN_MATCH, MAX_MATCH = 3, 258
+# How many earlier starts to remember per three-byte key. DOCS.md has the measurements.
+CHAIN = 64
 
 # Lengths 3..258 are coded as symbols 257..285, each with a base and some extra bits.
 LENGTH_CODES = [(257, 3, 0), (258, 4, 0), (259, 5, 0), (260, 6, 0), (261, 7, 0), (262, 8, 0), (263, 9, 0), (264, 10, 0),
@@ -64,7 +66,7 @@ def lz77(data):
         if len(key) == MIN_MATCH:
             chain = heads.setdefault(key, [])
             chain.insert(0, pos)
-            del chain[16:]  # the 16 most recent starts; older ones rarely win
+            del chain[CHAIN:]
 
     def longest(at):
         best_len, best_dist = 0, 0
