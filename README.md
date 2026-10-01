@@ -38,8 +38,8 @@ programs read them back. Sizes against `gzip -9`:
 | ember's vm.rs, 36 KB of Rust | 8288 | 8189 |
 
 Level with gzip or smaller on repetitive input, and within about one percent
-on real text, where gzip's longer hash chains still find a few more matches.
-Lazy matching, below, closed most of the gap that was there.
+on real text. Lazy matching and a deeper search closed most of the gap that was
+there; DOCS.md has the measurements, and the likely reason for what is left.
 
 ## Running it
 
