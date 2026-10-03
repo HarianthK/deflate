@@ -108,12 +108,7 @@ def lz77(data):
     return tokens
 
 
-def lengths_from(counts, limit):
-    # A Huffman tree, then anything deeper than the format allows is flattened.
-    if not counts:
-        return {}
-    if len(counts) == 1:
-        return {next(iter(counts)): 1}
+def huffman_lengths(counts):
     heap = [[weight, i, {symbol: 0}] for i, (symbol, weight) in enumerate(sorted(counts.items()))]
     heapq.heapify(heap)
     nxt = len(heap)
@@ -123,15 +118,21 @@ def lengths_from(counts, limit):
         merged = {s: d + 1 for s, d in list(a.items()) + list(b.items())}
         heapq.heappush(heap, [w1 + w2, nxt, merged])
         nxt += 1
-    lengths = heap[0][2]
-    if max(lengths.values()) > limit:
-        # Rare, and costs a few bits: cap the deep codes, then lengthen cheap ones until Kraft holds.
-        for symbol in lengths:
-            lengths[symbol] = min(lengths[symbol], limit)
-        while sum(2.0 ** -length for length in lengths.values()) > 1.0000001:
-            symbol = min((s for s in lengths if lengths[s] < limit), key=lambda s: (lengths[s], -counts[s]))
-            lengths[symbol] += 1
-    return lengths
+    return heap[0][2]
+
+
+def lengths_from(counts, limit):
+    # A Huffman tree is always complete, which zlib requires of every code. When it is too
+    # deep, the counts are flattened and the tree rebuilt, rather than trimming it after.
+    if not counts:
+        return {}
+    if len(counts) == 1:
+        return {next(iter(counts)): 1}
+    while True:
+        lengths = huffman_lengths(counts)
+        if max(lengths.values()) <= limit:
+            return lengths
+        counts = {symbol: (count + 1) // 2 for symbol, count in counts.items()}
 
 
 def canonical(lengths):

@@ -35,11 +35,25 @@ lengths of the code that codes the lengths.
 
 Codes may be at most 15 bits (7 for the header's own code). A file with a
 very skewed distribution can produce a deeper tree, and then the lengths have
-to be flattened: cap the deep ones, then lengthen some short ones until the
-Kraft sum is back to one, which is the arithmetic statement of "the tree
-closes up". Doing this optimally is the package-merge algorithm; this does
-the cheap fix, which costs a few bits on rare inputs. That is the one real
-corner cut here.
+to be flattened so the tree still closes up: the Kraft sum, the total of one
+over two to the power of each length, must come to exactly one.
+
+The first version capped the deep codes and then lengthened short ones until
+the sum fell to one or below. Below was the bug. A sum under one is an
+incomplete code, and zlib rejects every incomplete code with "invalid code
+lengths set", so some inputs made files that no gzip could read. None of the
+test inputs happened to push the header's 7-bit code past its limit, and the
+bug sat there for ten days. It surfaced when testing an unrelated change
+altered the test's own source, which the test also compresses: on that one
+input the header's code came out at 0.883.
+
+The fix stops trimming a finished tree. When the tree is too deep, the counts
+are halved, rounding up so nothing reaches zero, and the tree is built again,
+until it fits. A Huffman tree is complete by construction, so the code always
+is. It is not optimal, which package-merge would be, but it can only cost a few
+bits, never a broken file. A test now builds codes from Fibonacci counts, which
+make the deepest tree possible and so always hit the limit, and checks the sum
+is exactly one with exact fractions; the old trimming fails it.
 
 ## Compression can make a file bigger, so gzip cheats
 

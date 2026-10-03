@@ -5,6 +5,7 @@ import random
 import subprocess
 import sys
 import zlib
+from fractions import Fraction
 
 import deflate
 
@@ -55,6 +56,17 @@ far = deflate.lz77(b"xyz" + filler + b"xyz")
 assert not any(isinstance(t, tuple) and t[0] == 3 and t[1] > 4096 for t in far), "took a too-far 3-byte match"
 near = deflate.lz77(b"xyz" + filler[:100] + b"xyz")
 assert (3, 103) in near, "dropped a near 3-byte match"
+
+# Every code must be complete, its lengths filling the tree exactly (a Kraft sum of 1):
+# zlib rejects an incomplete one. Fibonacci counts build the deepest possible tree, so they
+# always hit the depth limit, which is where the old trimming left codes incomplete.
+fib = [1, 1]
+while len(fib) < 25:
+    fib.append(fib[-1] + fib[-2])
+for limit, n in ((7, 19), (15, 25)):
+    lengths = deflate.lengths_from(dict(enumerate(fib[:n])), limit)
+    assert max(lengths.values()) <= limit, f"a code is longer than {limit} bits"
+    assert sum(Fraction(1, 2 ** l) for l in lengths.values()) == 1, f"incomplete code at limit {limit}"
 
 # The real gzip program, if it is installed, is the strictest reader there is.
 sample = CASES["english"] + CASES["own source"]
