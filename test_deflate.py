@@ -48,6 +48,14 @@ for label, data in CASES.items():
     print(f"{label:18} {len(data):>7} bytes -> ours {ours:>7}  gzip -9 {theirs:>7}  "
           f"({100 * ours / theirs:.0f}% of theirs)")
 
+# A three-byte repeat from more than 4096 bytes back costs more as a match than as three
+# literals, so, as in zlib, it must not be taken; a nearer one still must be.
+filler = bytes(b for b in random.Random(0).randbytes(6000) if b not in b"xyz")[:5000]
+far = deflate.lz77(b"xyz" + filler + b"xyz")
+assert not any(isinstance(t, tuple) and t[0] == 3 and t[1] > 4096 for t in far), "took a too-far 3-byte match"
+near = deflate.lz77(b"xyz" + filler[:100] + b"xyz")
+assert (3, 103) in near, "dropped a near 3-byte match"
+
 # The real gzip program, if it is installed, is the strictest reader there is.
 sample = CASES["english"] + CASES["own source"]
 open("sample.bin", "wb").write(sample)

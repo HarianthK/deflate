@@ -10,6 +10,7 @@ WINDOW = 32768
 MIN_MATCH, MAX_MATCH = 3, 258
 # How many earlier starts to remember per three-byte key. DOCS.md has the measurements.
 CHAIN = 64
+TOO_FAR = 4096
 
 # Lengths 3..258 are coded as symbols 257..285, each with a base and some extra bits.
 LENGTH_CODES = [(257, 3, 0), (258, 4, 0), (259, 5, 0), (260, 6, 0), (261, 7, 0), (262, 8, 0), (263, 9, 0), (264, 10, 0),
@@ -81,6 +82,10 @@ def lz77(data):
                 best_len, best_dist = length, dist
                 if length == MAX_MATCH:
                     break
+        # A three-byte match from far back costs more bits than three literals, so zlib
+        # refuses it, and so does this.
+        if best_len == MIN_MATCH and best_dist > TOO_FAR:
+            return 0, 0
         return best_len, best_dist
 
     while i < len(data):
