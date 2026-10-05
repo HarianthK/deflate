@@ -1,7 +1,8 @@
-# Run: python test_deflate.py. Every file is decompressed by someone else's code, never ours.
+# Run: python test_deflate.py. What we write, someone else's code reads; what we read, theirs wrote.
 import gzip
 import os
 import random
+import struct
 import subprocess
 import sys
 import zlib
@@ -81,6 +82,66 @@ except FileNotFoundError:
 finally:
     os.remove("sample.bin")
     os.remove("sample.bin.gz")
+
+# The reading half, the other way round: our inflate on streams zlib wrote, at every level
+# and with each strategy, so every block type and table shape zlib makes is read.
+for label, data in CASES.items():
+    for level in range(10):
+        for strategy in (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FIXED, zlib.Z_HUFFMAN_ONLY, zlib.Z_RLE):
+            z = zlib.compressobj(level, zlib.DEFLATED, -15, 9, strategy)
+            raw = z.compress(data) + z.flush()
+            out, end = deflate.inflate(raw + b"trailer")
+            assert out == data and end == len(raw), f"{label}: inflate misread level {level}, strategy {strategy}"
+    assert deflate.gunzip(gzip.compress(data)) == data, f"{label}: gunzip misread gzip.compress"
+
+# A header with every optional field: extra data, a name, a comment and a header CRC.
+z = zlib.compressobj(6, zlib.DEFLATED, -15)
+body = z.compress(b"fields") + z.flush()
+header = b"\x1f\x8b\x08\x1e" + bytes(6) + b"\x03\x00abc" + b"name\0" + b"comment\0" + b"\0\0"
+assert deflate.gunzip(header + body + struct.pack("<II", zlib.crc32(b"fields"), 6)) == b"fields"
+
+
+# Broken input must be refused with a reason, not misread or crashed on.
+def refused(stream, reason, read=deflate.inflate):
+    try:
+        read(stream)
+    except ValueError as e:
+        assert reason in str(e), f"wanted {reason!r}, got {e!r}"
+        return
+    raise AssertionError(f"accepted a stream that should fail with {reason!r}")
+
+
+refused(b"\x07", "reserved")
+refused(b"\x01\x05\x00\x00\x00hello", "complement")
+refused(b"\x01\x05\x00\xfa\xffhel", "ends early")
+# A fixed block whose first act is to copy 3 bytes from 1 back, before there are any.
+w = deflate.BitWriter()
+w.write(1, 1)
+w.write(1, 2)
+w.write_code(1, 7)
+w.write_code(0, 5)
+w.align()
+refused(bytes(w.out), "reaches back")
+good = gzip.compress(b"some data")
+# The CRC and the length are checked apart: one bit off in either is enough.
+refused(good[:-8] + bytes([good[-8] ^ 1]) + good[-7:], "trailer", deflate.gunzip)
+refused(good[:-4] + bytes([good[-4] ^ 1]) + good[-3:], "trailer", deflate.gunzip)
+# Three one-bit codes cannot exist: two use up every one-bit pattern there is.
+refused({0: 1, 1: 1, 2: 1}, "more symbols", deflate.decoder)
+refused(b"PK\x03\x04", "not a gzip", deflate.gunzip)
+
+# Flipping random bits of a real stream may give garbage, but only ever a ValueError.
+rng = random.Random(1)
+raw = zlib.compress(CASES["own source"], 9)[2:-4]
+for _ in range(300):
+    bad = bytearray(raw)
+    for _ in range(rng.randrange(1, 4)):
+        bad[rng.randrange(len(bad))] ^= 1 << rng.randrange(8)
+    try:
+        deflate.inflate(bytes(bad))
+    except ValueError:
+        pass
+print("inflate read every stream zlib wrote, and refused the broken ones")
 
 print("FAILURES" if failures else "ok")
 sys.exit(1 if failures else 0)

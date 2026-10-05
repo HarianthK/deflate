@@ -104,8 +104,36 @@ finding.
 
 ## The check is the whole point
 
-Nothing in this repo decompresses anything. Every test writes a file and then
-asks somebody else to read it: Python's `gzip` module, `zlib` with a raw
-window, and the `gzip` program itself. A compressor that agreed with my own
-decompressor would only prove the two share my misunderstanding, which is the
-easiest way to be confidently wrong about a file format.
+Every test of the writer writes a file and then asks somebody else to read
+it: Python's `gzip` module, `zlib` with a raw window, and the `gzip` program
+itself. A compressor that agreed with my own decompressor would only prove the
+two share my misunderstanding, which is the easiest way to be confidently
+wrong about a file format.
+
+So when the reading half arrived, the rule was turned around rather than
+dropped: `inflate` is tested only on streams zlib wrote, never on this file's
+own output. Every input is compressed at all ten levels with each of zlib's
+four strategies, which between them produce stored, fixed and dynamic blocks,
+run-length-only matching and Huffman-only coding, and all of it must come back
+byte for byte.
+
+## Reading is where the trust boundary is
+
+A compressor only ever sees its own data. A decompressor reads whatever it is
+handed, so the reader checks what the writer never had to: a block type of 3,
+a stored length that disagrees with its complement, a table longer than the
+format allows, a run of lengths spilling past the tables, a set of code lengths
+that would need more codes than exist, a match reaching back before the first
+byte, and a trailer whose CRC or length does not match. Each has a hand-built
+broken stream in the test, and 300 randomly bit-flipped real streams must fail
+with a `ValueError` and nothing else, never an index error from deep inside.
+
+Two things about reading surprised me. A match may overlap the bytes it is
+writing: distance 1, length 258 means "repeat the last byte 258 times", so the
+copy has to go one byte at a time, and copying the slice in one step reads
+bytes that do not exist yet. Breaking it that way made the "one long run" case
+fail at once. And the stream does not say how long it is; the reader only
+knows it is done after the end-of-block code of the block marked final, which
+is why `inflate` returns where it stopped, so the gzip trailer can be found.
+
+A gzip file may be several members concatenated; `gunzip` reads only the first.

@@ -1,5 +1,5 @@
 # Writes a real gzip file: LZ77 matching, then Huffman coding, then the DEFLATE bit layout.
-# Run: python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic]. DOCS.md explains the format.
+# Run: python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic], or -d FILE.gz to read one back.
 import heapq
 import struct
 import sys
@@ -24,6 +24,8 @@ DISTANCE_CODES = [(0, 1, 0), (1, 2, 0), (2, 3, 0), (3, 4, 0), (4, 5, 1), (5, 7, 
                   (23, 3073, 10), (24, 4097, 11), (25, 6145, 11), (26, 8193, 12), (27, 12289, 12), (28, 16385, 13),
                   (29, 24577, 13)]
 CODE_LENGTH_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+FIXED_LIT_LENGTHS = {s: (8 if s < 144 else 9 if s < 256 else 7 if s < 280 else 8) for s in range(288)}
+FIXED_DIST_LENGTHS = {s: 5 for s in range(30)}
 
 
 class BitWriter:
@@ -193,8 +195,7 @@ def deflate(data, mode="auto"):
     lit_counts[256] += 1  # end of block
 
     if mode == "fixed":
-        lit_lengths = {s: (8 if s < 144 else 9 if s < 256 else 7 if s < 280 else 8) for s in range(288)}
-        dist_lengths = {s: 5 for s in range(30)}
+        lit_lengths, dist_lengths = FIXED_LIT_LENGTHS, FIXED_DIST_LENGTHS
         w.write(1, 1)
         w.write(1, 2)
     else:
@@ -245,11 +246,144 @@ def gzip_bytes(data, name=None, mode="auto"):
     return header + deflate(data, mode) + struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
 
 
+class BitReader:
+    # The mirror of BitWriter: values come off each byte from its low end.
+    def __init__(self, data, pos=0):
+        self.data, self.pos, self.bit = data, pos, 0
+
+    def read(self, n):
+        value = 0
+        for i in range(n):
+            if self.pos >= len(self.data):
+                raise ValueError("the stream ends early")
+            value |= ((self.data[self.pos] >> self.bit) & 1) << i
+            self.bit += 1
+            if self.bit == 8:
+                self.pos, self.bit = self.pos + 1, 0
+        return value
+
+    def align(self):
+        if self.bit:
+            self.pos, self.bit = self.pos + 1, 0
+
+
+def decoder(lengths):
+    # Lengths alone rebuild the codes, as canonical() made them; more codes than fit is corrupt.
+    lengths = {s: n for s, n in lengths.items() if n}
+    if sum(1 << (15 - n) for n in lengths.values()) > 1 << 15:
+        raise ValueError("a code has more symbols than its lengths leave room for")
+    return {(lengths[s], code): s for s, code in canonical(lengths).items()}
+
+
+def read_symbol(r, table):
+    # Huffman codes arrive high bit first, one bit at a time, until one matches.
+    code = 0
+    for n in range(1, 16):
+        code = (code << 1) | r.read(1)
+        if (n, code) in table:
+            return table[n, code]
+    raise ValueError("no code matches these bits")
+
+
+def read_tables(r):
+    hlit, hdist, hclen = r.read(5) + 257, r.read(5) + 1, r.read(4) + 4
+    if hlit > 286 or hdist > 30:
+        raise ValueError("a table is longer than the format allows")
+    cl_table = decoder({s: r.read(3) for s in CODE_LENGTH_ORDER[:hclen]})
+    lengths = []
+    while len(lengths) < hlit + hdist:
+        symbol = read_symbol(r, cl_table)
+        if symbol < 16:
+            lengths.append(symbol)
+        elif symbol == 16:
+            if not lengths:
+                raise ValueError("a repeat with nothing before it to repeat")
+            lengths += [lengths[-1]] * (3 + r.read(2))
+        else:
+            lengths += [0] * (3 + r.read(3) if symbol == 17 else 11 + r.read(7))
+    if len(lengths) > hlit + hdist:
+        raise ValueError("a run of code lengths goes past the end of the tables")
+    if not lengths[256]:
+        raise ValueError("the block has no end-of-block code")
+    return decoder(dict(enumerate(lengths[:hlit]))), decoder(dict(enumerate(lengths[hlit:])))
+
+
+def inflate(data, pos=0):
+    # Returns the bytes and where the stream ended, since a gzip trailer follows it.
+    r, out, final = BitReader(data, pos), bytearray(), 0
+    while not final:
+        final, kind = r.read(1), r.read(2)
+        if kind == 0:
+            r.align()
+            if r.pos + 4 > len(data):
+                raise ValueError("the stream ends early")
+            n, check = struct.unpack("<HH", data[r.pos:r.pos + 4])
+            if n ^ check != 0xFFFF:
+                raise ValueError("a stored block's length and its complement disagree")
+            if r.pos + 4 + n > len(data):
+                raise ValueError("the stream ends early")
+            out += data[r.pos + 4:r.pos + 4 + n]
+            r.pos += 4 + n
+            continue
+        if kind == 3:
+            raise ValueError("block type 3 is reserved")
+        lit, dist = (decoder(FIXED_LIT_LENGTHS), decoder(FIXED_DIST_LENGTHS)) if kind == 1 else read_tables(r)
+        while (symbol := read_symbol(r, lit)) != 256:
+            if symbol < 256:
+                out.append(symbol)
+                continue
+            if symbol > 285:
+                raise ValueError(f"length symbol {symbol} does not exist")
+            _, base, extra = LENGTH_CODES[symbol - 257]
+            length = base + r.read(extra)
+            code = read_symbol(r, dist)
+            _, base, extra = DISTANCE_CODES[code]
+            distance = base + r.read(extra)
+            if distance > len(out):
+                raise ValueError("a match reaches back before the start of the data")
+            # One byte at a time, so a match may overlap what it is writing: that is how runs work.
+            for _ in range(length):
+                out.append(out[-distance])
+    r.align()
+    return bytes(out), r.pos
+
+
+def gunzip(data):
+    # One gzip member; files made by concatenating several are not read past the first.
+    if data[:3] != b"\x1f\x8b\x08":
+        raise ValueError("not a gzip file")
+    flags, pos = data[3], 10
+    if flags & 4:
+        pos += 2 + struct.unpack("<H", data[pos:pos + 2])[0]
+    for bit in (8, 16):  # a file name, then a comment, each ending in a zero byte
+        if flags & bit:
+            pos = data.index(b"\0", pos) + 1
+    if flags & 2:
+        pos += 2
+    out, pos = inflate(data, pos)
+    if len(data) < pos + 8:
+        raise ValueError("the stream ends early")
+    crc, size = struct.unpack("<II", data[pos:pos + 8])
+    if crc != zlib.crc32(out) or size != len(out) & 0xFFFFFFFF:
+        raise ValueError("the CRC or length in the trailer does not match the data")
+    return out
+
+
 if __name__ == "__main__":
     argv = sys.argv[1:]
     args = [a for a in argv if not a.startswith("-")]
     if not args:
-        sys.exit("usage: python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic]")
+        sys.exit("usage: python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic], or -d FILE.gz [-o OUT]")
+    if "-d" in argv:
+        out = argv[argv.index("-o") + 1] if "-o" in argv else args[0].removesuffix(".gz")
+        if out == args[0]:
+            sys.exit("deflate: give -o, since the output would overwrite the input")
+        try:
+            data = gunzip(open(args[0], "rb").read())
+        except ValueError as e:
+            sys.exit(f"deflate: {args[0]}: {e}")
+        open(out, "wb").write(data)
+        sys.exit(print(f"{args[0]}: {len(data)} bytes to {out}"))
     mode = "stored" if "--stored" in argv else "fixed" if "--fixed" in argv else "dynamic" if "--dynamic" in argv else "auto"
     source = args[0]
     out = argv[argv.index("-o") + 1] if "-o" in argv else source + ".gz"

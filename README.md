@@ -1,6 +1,6 @@
 # deflate
 
-A gzip compressor written from the bits up, in one Python file with no
+A gzip compressor and decompressor written from the bits up, in one Python file with no
 dependencies. It produces real `.gz` files that the `gzip` program reads.
 
     $ python deflate.py deflate.py
@@ -22,6 +22,9 @@ patterns than the rare ones.
   builds all three and keeps the smallest, which is why incompressible input
   never grows by more than the 5 bytes a stored block costs.
 - The gzip envelope: header, CRC32 and length.
+- The reading half too: `inflate` and `gunzip` decode any DEFLATE stream,
+  including every level and strategy zlib writes, and refuse broken ones with
+  a reason rather than misreading them.
 
 ## How it compares
 
@@ -44,6 +47,7 @@ there; DOCS.md has the measurements, and the likely reason for what is left.
 ## Running it
 
     python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic]
+    python deflate.py -d FILE.gz [-o OUT]
     python test_deflate.py
 
 ## Notes
