@@ -349,10 +349,19 @@ def inflate(data, pos=0):
 
 
 def gunzip(data):
-    # One gzip member; files made by concatenating several are not read past the first.
-    if data[:3] != b"\x1f\x8b\x08":
-        raise ValueError("not a gzip file")
-    flags, pos = data[3], 10
+    # Gzip files joined end to end (cat a.gz b.gz) are one valid file, read as the parts joined.
+    out, pos = b"", 0
+    while True:
+        part, pos = gunzip_member(data, pos)
+        out += part
+        if pos == len(data):
+            return out
+
+
+def gunzip_member(data, pos):
+    if data[pos:pos + 3] != b"\x1f\x8b\x08":
+        raise ValueError("not a gzip file" if pos == 0 else f"bytes after the gzip data at offset {pos} are not another member")
+    flags, pos = data[pos + 3], pos + 10
     if flags & 4:
         pos += 2 + struct.unpack("<H", data[pos:pos + 2])[0]
     for bit in (8, 16):  # a file name, then a comment, each ending in a zero byte
@@ -366,7 +375,7 @@ def gunzip(data):
     crc, size = struct.unpack("<II", data[pos:pos + 8])
     if crc != zlib.crc32(out) or size != len(out) & 0xFFFFFFFF:
         raise ValueError("the CRC or length in the trailer does not match the data")
-    return out
+    return out, pos + 8
 
 
 if __name__ == "__main__":

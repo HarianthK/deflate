@@ -130,6 +130,15 @@ refused(good[:-4] + bytes([good[-4] ^ 1]) + good[-3:], "trailer", deflate.gunzip
 refused({0: 1, 1: 1, 2: 1}, "more symbols", deflate.decoder)
 refused(b"PK\x03\x04", "not a gzip", deflate.gunzip)
 
+# Members joined end to end are one file, as cat a.gz b.gz makes; Python's gzip agrees.
+joined = gzip.compress(b"first, ") + gzip.compress(b"") + gzip.compress(CASES["english"])
+assert deflate.gunzip(joined) == gzip.decompress(joined) == b"first, " + CASES["english"]
+# Each member's trailer is checked, not only the last one's.
+broken = bytearray(joined)
+broken[len(gzip.compress(b"first, ")) - 8] ^= 1
+refused(bytes(broken), "trailer", deflate.gunzip)
+refused(joined + b"junk", "offset", deflate.gunzip)
+
 # Flipping random bits of a real stream may give garbage, but only ever a ValueError.
 rng = random.Random(1)
 raw = zlib.compress(CASES["own source"], 9)[2:-4]

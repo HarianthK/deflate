@@ -136,4 +136,9 @@ fail at once. And the stream does not say how long it is; the reader only
 knows it is done after the end-of-block code of the block marked final, which
 is why `inflate` returns where it stopped, so the gzip trailer can be found.
 
-A gzip file may be several members concatenated; `gunzip` reads only the first.
+A gzip file may be several members concatenated: `cat a.gz b.gz > both.gz` is
+a valid file, and so is what a log rotator appends to over time. `gunzip` reads
+them all and joins the parts, checking each member's own CRC and length, so a
+corrupt first member is caught even when the last one is fine. Anything after
+the last member that is not another member is refused with its offset, rather
+than silently dropped.
