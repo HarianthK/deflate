@@ -142,3 +142,33 @@ them all and joins the parts, checking each member's own CRC and length, so a
 corrupt first member is caught even when the last one is fine. Anything after
 the last member that is not another member is refused with its offset, rather
 than silently dropped.
+
+## Making the reader fast
+
+The first inflate read one bit at a time and matched codes by looking up
+(length, code) pairs after every bit, so a 9-bit literal cost nine reads and
+nine lookups. Now each Huffman table is a list indexed by the next few bits as
+they come off the stream, as long as the longest code; every entry that starts
+with a code's bits holds that code's symbol and length. One `peek`, one index,
+one `skip`. The catch is bit order: codes are sent high bit first into bytes
+filled from the low end, so in the bits as read each code sits reversed, and the
+table is built with the reversed codes.
+
+The second cost was the match copy, one byte at a time so that overlapping
+matches work. A match is periodic in its distance, so the copy is now the last
+`distance` bytes repeated whole, then the part of them that is left over. That
+handles a run of one byte the same as a copy from far back.
+
+Timed in-process, median of 15, on 214 KB of text compressed by zlib:
+
+| | before | after |
+| --- | --- | --- |
+| level 1 | 130 ms | 54 ms |
+| level 9 | 61 ms | 18 ms |
+
+Peeking pads past the end with zeros, so the end check moved to `skip`, which
+refuses to step past the last bit. Removing that check made no test fail, which
+is how a hole in the tests showed up: nothing cut a stream short inside its
+coded data. Now the tests cut two streams at each of their last 40 bytes and
+every one must be refused. Without the check those hang, decoding the zeros as
+literals forever, which is exactly what a truncated download must not do.

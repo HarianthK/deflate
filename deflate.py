@@ -251,15 +251,20 @@ class BitReader:
     def __init__(self, data, pos=0):
         self.data, self.pos, self.bit = data, pos, 0
 
+    def peek(self, n):
+        # The next n bits (15 at most), zero past the end; skip() checks they were really there.
+        chunk = int.from_bytes(self.data[self.pos:self.pos + 4], "little")
+        return (chunk >> self.bit) & ((1 << n) - 1)
+
+    def skip(self, n):
+        at = self.pos * 8 + self.bit + n
+        if at > len(self.data) * 8:
+            raise ValueError("the stream ends early")
+        self.pos, self.bit = at >> 3, at & 7
+
     def read(self, n):
-        value = 0
-        for i in range(n):
-            if self.pos >= len(self.data):
-                raise ValueError("the stream ends early")
-            value |= ((self.data[self.pos] >> self.bit) & 1) << i
-            self.bit += 1
-            if self.bit == 8:
-                self.pos, self.bit = self.pos + 1, 0
+        value = self.peek(n)
+        self.skip(n)
         return value
 
     def align(self):
@@ -272,17 +277,26 @@ def decoder(lengths):
     lengths = {s: n for s, n in lengths.items() if n}
     if sum(1 << (15 - n) for n in lengths.values()) > 1 << 15:
         raise ValueError("a code has more symbols than its lengths leave room for")
-    return {(lengths[s], code): s for s, code in canonical(lengths).items()}
+    # A table indexed by the next `bits` bits as they come off the stream. Codes are sent high
+    # bit first into bytes filled from the low end, so each code sits in it reversed.
+    bits = max(lengths.values(), default=1)
+    table = [None] * (1 << bits)
+    for s, code in canonical(lengths).items():
+        n = lengths[s]
+        reversed_code = int(f"{code:0{n}b}"[::-1], 2)
+        for rest in range(0, 1 << bits, 1 << n):
+            table[reversed_code | rest] = (s, n)
+    return table, bits
 
 
-def read_symbol(r, table):
-    # Huffman codes arrive high bit first, one bit at a time, until one matches.
-    code = 0
-    for n in range(1, 16):
-        code = (code << 1) | r.read(1)
-        if (n, code) in table:
-            return table[n, code]
-    raise ValueError("no code matches these bits")
+def read_symbol(r, decode):
+    # One lookup for the whole code, then only its own length is used up.
+    table, bits = decode
+    entry = table[r.peek(bits)]
+    if entry is None:
+        raise ValueError("no code matches these bits")
+    r.skip(entry[1])
+    return entry[0]
 
 
 def read_tables(r):
@@ -341,9 +355,10 @@ def inflate(data, pos=0):
             distance = base + r.read(extra)
             if distance > len(out):
                 raise ValueError("a match reaches back before the start of the data")
-            # One byte at a time, so a match may overlap what it is writing: that is how runs work.
-            for _ in range(length):
-                out.append(out[-distance])
+            # A match may overlap what it is writing (distance 1 is a run), so the copy is the last
+            # `distance` bytes repeated until there are `length` of them.
+            back = out[-distance:]
+            out += back * (length // distance) + back[:length % distance]
     r.align()
     return bytes(out), r.pos
 

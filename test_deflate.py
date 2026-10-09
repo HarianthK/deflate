@@ -139,6 +139,14 @@ broken[len(gzip.compress(b"first, ")) - 8] ^= 1
 refused(bytes(broken), "trailer", deflate.gunzip)
 refused(joined + b"junk", "offset", deflate.gunzip)
 
+# Cut short anywhere in its coded data, a stream must be refused, never decoded from the
+# zeros a reader sees past the end. Each of the last 40 bytes is tried as the cut.
+for level in (1, 9):
+    whole = zlib.compressobj(level, zlib.DEFLATED, -15)
+    whole = whole.compress(CASES["english"] + CASES["own source"]) + whole.flush()
+    for cut in range(1, 41):
+        refused(whole[:-cut], "ends early")
+
 # Flipping random bits of a real stream may give garbage, but only ever a ValueError.
 rng = random.Random(1)
 raw = zlib.compress(CASES["own source"], 9)[2:-4]
