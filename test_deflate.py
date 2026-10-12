@@ -165,5 +165,26 @@ for _ in range(300):
         pass
 print("inflate read every stream zlib wrote, and refused the broken ones")
 
+# -t from the command line, as gzip -t: OK for a good file, the reason for a bad or missing
+# one, exit status 1 if any failed, and nothing written anywhere.
+good_data = CASES["english"]
+open("t-good.gz", "wb").write(gzip.compress(good_data))
+open("t-cut.gz", "wb").write(gzip.compress(good_data)[:-20])
+try:
+    script = deflate.__file__
+    both = subprocess.run([sys.executable, script, "-t", "t-good.gz", "t-cut.gz", "t-missing.gz"], capture_output=True, text=True)
+    assert both.returncode == 1, both
+    assert f"t-good.gz: OK, {len(good_data)} bytes" in both.stdout, both.stdout
+    # Reported, not crashed on: a traceback would also exit 1 and mention the name.
+    assert "t-cut.gz: the stream ends early" in both.stderr and "Traceback" not in both.stderr, both.stderr
+    assert any(line.startswith("t-missing.gz: ") for line in both.stderr.splitlines()), both.stderr
+    alone = subprocess.run([sys.executable, script, "-t", "t-good.gz"], capture_output=True, text=True)
+    assert alone.returncode == 0 and not alone.stderr, alone
+    assert not os.path.exists("t-good") and not os.path.exists("t-cut"), "-t wrote a file"
+finally:
+    for name in ("t-good.gz", "t-cut.gz"):
+        os.remove(name)
+print("-t reports each file and fails if any is broken")
+
 print("FAILURES" if failures else "ok")
 sys.exit(1 if failures else 0)

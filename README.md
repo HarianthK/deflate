@@ -48,6 +48,7 @@ there; DOCS.md has the measurements, and the likely reason for what is left.
 
     python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic]
     python deflate.py -d FILE.gz [-o OUT]
+    python deflate.py -t FILE.gz ...      # check files, as gzip -t, writing nothing
     python test_deflate.py
 
 ## Notes

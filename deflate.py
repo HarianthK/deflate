@@ -405,7 +405,17 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
     args = [a for a in argv if not a.startswith("-")]
     if not args:
-        sys.exit("usage: python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic], or -d FILE.gz [-o OUT]")
+        sys.exit("usage: python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic], -d FILE.gz [-o OUT], or -t FILE.gz ...")
+    if "-t" in argv:
+        # As gzip -t: read each file all the way through, CRC included, and write nothing.
+        bad = 0
+        for name in args:
+            try:
+                print(f"{name}: OK, {len(gunzip(open(name, 'rb').read()))} bytes")
+            except (OSError, ValueError) as e:
+                print(f"{name}: {e}", file=sys.stderr)
+                bad += 1
+        sys.exit(1 if bad else 0)
     if "-d" in argv:
         out = argv[argv.index("-o") + 1] if "-o" in argv else args[0].removesuffix(".gz")
         if out == args[0]:
