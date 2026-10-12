@@ -376,12 +376,20 @@ def gunzip(data):
 def gunzip_member(data, pos):
     if data[pos:pos + 3] != b"\x1f\x8b\x08":
         raise ValueError("not a gzip file" if pos == 0 else f"bytes after the gzip data at offset {pos} are not another member")
+    # The header is checked for length as it is read: a file cut short there is reported, not crashed on.
+    if len(data) < pos + 10:
+        raise ValueError("the stream ends early")
     flags, pos = data[pos + 3], pos + 10
     if flags & 4:
+        if len(data) < pos + 2:
+            raise ValueError("the stream ends early")
         pos += 2 + struct.unpack("<H", data[pos:pos + 2])[0]
     for bit in (8, 16):  # a file name, then a comment, each ending in a zero byte
         if flags & bit:
-            pos = data.index(b"\0", pos) + 1
+            end = data.find(b"\0", pos)
+            if end < 0:
+                raise ValueError("the stream ends early")
+            pos = end + 1
     if flags & 2:
         pos += 2
     out, pos = inflate(data, pos)

@@ -129,6 +129,11 @@ refused(good[:-4] + bytes([good[-4] ^ 1]) + good[-3:], "trailer", deflate.gunzip
 # Three one-bit codes cannot exist: two use up every one-bit pattern there is.
 refused({0: 1, 1: 1, 2: 1}, "more symbols", deflate.decoder)
 refused(b"PK\x03\x04", "not a gzip", deflate.gunzip)
+# Cut anywhere, header included, a gzip file is refused as ending early, never crashed on:
+# the header fields were once read without checking they were all there.
+full = header + body + struct.pack("<II", zlib.crc32(b"fields"), 6)
+for cut in range(3, len(full)):
+    refused(full[:cut], "ends early", deflate.gunzip)
 
 # Members joined end to end are one file, as cat a.gz b.gz makes; Python's gzip agrees.
 joined = gzip.compress(b"first, ") + gzip.compress(b"") + gzip.compress(CASES["english"])
