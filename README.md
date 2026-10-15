@@ -21,6 +21,8 @@ patterns than the rare ones.
 - All three block types: stored, fixed-table and dynamic-table. By default it
   builds all three and keeps the smallest, which is why incompressible input
   never grows by more than the 5 bytes a stored block costs.
+- Levels `-1` to `-9`, as gzip has: a shallower search for speed or a deeper
+  one for size, 6 by default.
 - The gzip envelope: header, CRC32 and length.
 - The reading half too: `inflate` and `gunzip` decode any DEFLATE stream,
   including every level and strategy zlib writes, and refuse broken ones with
@@ -46,7 +48,7 @@ there; DOCS.md has the measurements, and the likely reason for what is left.
 
 ## Running it
 
-    python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic]
+    python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic]
     python deflate.py -d FILE.gz [-o OUT]
     python deflate.py -t FILE.gz ...      # check files, as gzip -t, writing nothing
     python test_deflate.py

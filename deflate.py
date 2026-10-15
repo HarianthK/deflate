@@ -1,5 +1,5 @@
 # Writes a real gzip file: LZ77 matching, then Huffman coding, then the DEFLATE bit layout.
-# Run: python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic], or -d FILE.gz to read one back.
+# Run: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], or -d FILE.gz to read one back.
 import heapq
 import struct
 import sys
@@ -10,6 +10,10 @@ WINDOW = 32768
 MIN_MATCH, MAX_MATCH = 3, 258
 # How many earlier starts to remember per three-byte key. DOCS.md has the measurements.
 CHAIN = 64
+# Levels as gzip's -1 to -9: how far back each search looks, and whether it tries the next byte
+# too. 6, the default, is what CHAIN was chosen as; DOCS.md has what each one costs and saves.
+LEVELS = {1: (4, False), 2: (8, False), 3: (16, False), 4: (16, True), 5: (32, True),
+          6: (CHAIN, True), 7: (128, True), 8: (256, True), 9: (1024, True)}
 TOO_FAR = 4096
 
 # Lengths 3..258 are coded as symbols 257..285, each with a base and some extra bits.
@@ -60,7 +64,7 @@ def code_for(table, value):
     raise ValueError(value)
 
 
-def lz77(data):
+def lz77(data, chain_limit=CHAIN, lazy=True):
     # Longest match in the last 32 KiB, found by hashing the next three bytes.
     heads, tokens, i = {}, [], 0
 
@@ -69,7 +73,7 @@ def lz77(data):
         if len(key) == MIN_MATCH:
             chain = heads.setdefault(key, [])
             chain.insert(0, pos)
-            del chain[CHAIN:]
+            del chain[chain_limit:]
 
     def longest(at):
         best_len, best_dist = 0, 0
@@ -95,7 +99,7 @@ def lz77(data):
         remember(i)
         # Lazy matching, as gzip does: if a match starting one byte later is longer, emit
         # this byte as a literal and take that one instead.
-        if MIN_MATCH <= best_len < MAX_MATCH and longest(i + 1)[0] > best_len:
+        if lazy and MIN_MATCH <= best_len < MAX_MATCH and longest(i + 1)[0] > best_len:
             tokens.append(data[i])
             i += 1
             continue
@@ -169,10 +173,12 @@ def run_lengths(table):
     return out
 
 
-def deflate(data, mode="auto"):
+def deflate(data, mode="auto", level=6):
     # Incompressible input costs bits to Huffman-code, so the smallest of the three wins.
+    if level not in LEVELS:
+        raise ValueError(f"the level is 1 to 9, not {level}")
     if mode == "auto":
-        return min((deflate(data, m) for m in ("stored", "fixed", "dynamic")), key=len)
+        return min((deflate(data, m, level) for m in ("stored", "fixed", "dynamic")), key=len)
     w = BitWriter()
     if mode == "stored":
         blocks = [data[s:s + 65535] for s in range(0, len(data), 65535)] or [b""]
@@ -183,7 +189,7 @@ def deflate(data, mode="auto"):
             w.out += struct.pack("<HH", len(block), len(block) ^ 0xFFFF) + block
         return bytes(w.out)
 
-    tokens = lz77(data)
+    tokens = lz77(data, *LEVELS[level])
     lit_counts, dist_counts = Counter(), Counter()
     for token in tokens:
         if isinstance(token, int):
@@ -239,11 +245,13 @@ def deflate(data, mode="auto"):
     return bytes(w.out)
 
 
-def gzip_bytes(data, name=None, mode="auto"):
-    header = struct.pack("<BBBBIBB", 0x1F, 0x8B, 8, 8 if name else 0, 0, 0, 3)
+def gzip_bytes(data, name=None, mode="auto", level=6):
+    # The XFL byte tells a reader the file was made for size (2) or for speed (4), as gzip -9 and -1 set it.
+    xfl = 2 if level == 9 else 4 if level == 1 else 0
+    header = struct.pack("<BBBBIBB", 0x1F, 0x8B, 8, 8 if name else 0, 0, xfl, 3)
     if name:
         header += name.encode() + b"\0"
-    return header + deflate(data, mode) + struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
+    return header + deflate(data, mode, level) + struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
 
 
 class BitReader:
@@ -405,7 +413,7 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
     args = [a for a in argv if not a.startswith("-")]
     if not args:
-        sys.exit("usage: python deflate.py FILE [-o OUT] [--stored|--fixed|--dynamic], -d FILE.gz [-o OUT], or -t FILE.gz ...")
+        sys.exit("usage: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], -d FILE.gz [-o OUT], or -t FILE.gz ...")
     if "-t" in argv:
         # As gzip -t: read each file all the way through, CRC included, and write nothing.
         bad = 0
@@ -430,7 +438,8 @@ if __name__ == "__main__":
     source = args[0]
     out = argv[argv.index("-o") + 1] if "-o" in argv else source + ".gz"
     data = open(source, "rb").read()
-    packed = gzip_bytes(data, name=source.replace("\\", "/").split("/")[-1], mode=mode)
+    level = next((int(a[1]) for a in argv if len(a) == 2 and a[0] == "-" and a[1] in "123456789"), 6)
+    packed = gzip_bytes(data, name=source.replace("\\", "/").split("/")[-1], mode=mode, level=level)
     open(out, "wb").write(packed)
     ratio = 100 * (1 - len(packed) / len(data)) if data else 0
-    print(f"{source}: {len(data)} -> {len(packed)} bytes ({ratio:.1f}% smaller), {mode} blocks")
+    print(f"{source}: {len(data)} -> {len(packed)} bytes ({ratio:.1f}% smaller), {mode} blocks, level {level}")

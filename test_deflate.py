@@ -186,5 +186,33 @@ finally:
         os.remove(name)
 print("-t reports each file and fails if any is broken")
 
+# Levels, as gzip's: each is read back by zlib, 1 is bigger than 6 and 9 no bigger (a deeper search
+# is not always smaller: here 8 can lose to 7), 6 is the default, and the header says which end.
+text = CASES["english"] + CASES["own source"]
+sizes = []
+for level in range(1, 10):
+    packed = deflate.gzip_bytes(text, level=level)
+    assert gzip.decompress(packed) == text, f"level {level} read back wrong"
+    sizes.append(len(packed))
+assert sizes[0] > sizes[5] >= sizes[8], f"sizes by level: {sizes}"
+assert deflate.deflate(text) == deflate.deflate(text, level=6)
+assert [deflate.gzip_bytes(b"x", level=n)[8] for n in (1, 6, 9)] == [4, 0, 2]
+try:
+    deflate.deflate(b"x", level=10)
+    raise AssertionError("level 10 was accepted")
+except ValueError as e:
+    assert "1 to 9" in str(e), e
+open("t-level.txt", "wb").write(text)
+try:
+    run = subprocess.run([sys.executable, deflate.__file__, "t-level.txt", "-9", "-o", "t-level.gz"], capture_output=True, text=True)
+    assert run.returncode == 0 and "level 9" in run.stdout, run
+    written = open("t-level.gz", "rb").read()
+    assert written[8] == 2 and gzip.decompress(written) == text and len(written) < sizes[0], "the -9 flag was not used"
+finally:
+    for name in ("t-level.txt", "t-level.gz"):
+        if os.path.exists(name):
+            os.remove(name)
+print("levels 1 to 9 all read back; sizes by level:", sizes)
+
 print("FAILURES" if failures else "ok")
 sys.exit(1 if failures else 0)

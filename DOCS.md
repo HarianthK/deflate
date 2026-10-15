@@ -172,3 +172,32 @@ is how a hole in the tests showed up: nothing cut a stream short inside its
 coded data. Now the tests cut two streams at each of their last 40 bytes and
 every one must be refused. Without the check those hang, decoding the zeros as
 literals forever, which is exactly what a truncated download must not do.
+
+## Levels
+
+gzip's `-1` to `-9` trade time for size, and the two dials are the ones this file
+already had: how many earlier positions each search looks at, and whether it
+tries the next byte too before taking a match. Level 6 is exactly what was here
+before, a chain of 64 with lazy matching, and its output is byte for byte the
+same. Lower levels shorten the chain and drop lazy matching; higher ones lengthen
+the chain up to 1024. As gzip does, the header's XFL byte says 4 for the fastest
+level and 2 for the smallest.
+
+Measured in one process, median of five, on 81,569 bytes of ember's Rust and
+prose, beside zlib at the same level:
+
+| level | ours | time | zlib |
+| --- | --- | --- | --- |
+| 1 | 25,163 | 0.61 s | 27,183 |
+| 3 | 23,882 | 0.94 s | 25,092 |
+| 6 | 22,923 | 1.84 s | 22,934 |
+| 9 | 22,827 | 5.16 s | 22,784 |
+
+Level 1 is three times faster than 6 for a file 10% bigger, and level 9 nearly
+three times slower for 0.4% smaller, which is about the shape of zlib's own
+curve; levels 4 to 6 took about the same time here, within the noise. One thing
+the tests had wrong at first: a deeper search is not always smaller. On the test
+text, level 8 once came out three bytes bigger than level 7, because each match is
+chosen greedily and a longer one now can cost a better one later. The test now
+asks only that level 1 is bigger than 6 and 9 is no bigger than 6.
+
