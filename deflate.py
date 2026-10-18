@@ -1,5 +1,5 @@
 # Writes a real gzip file: LZ77 matching, then Huffman coding, then the DEFLATE bit layout.
-# Run: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], or -d FILE.gz to read one back.
+# Run: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], -d FILE.gz to read one back, -c for stdout.
 import heapq
 import struct
 import sys
@@ -424,14 +424,18 @@ if __name__ == "__main__":
                 print(f"{name}: {e}", file=sys.stderr)
                 bad += 1
         sys.exit(1 if bad else 0)
+    # -c, as gzip's: the bytes go to standard output and nothing else is printed, so it pipes.
+    to_stdout = "-c" in argv
     if "-d" in argv:
         out = argv[argv.index("-o") + 1] if "-o" in argv else args[0].removesuffix(".gz")
-        if out == args[0]:
+        if out == args[0] and not to_stdout:
             sys.exit("deflate: give -o, since the output would overwrite the input")
         try:
             data = gunzip(open(args[0], "rb").read())
         except ValueError as e:
             sys.exit(f"deflate: {args[0]}: {e}")
+        if to_stdout:
+            sys.exit(sys.stdout.buffer.write(data) and 0)
         open(out, "wb").write(data)
         sys.exit(print(f"{args[0]}: {len(data)} bytes to {out}"))
     mode = "stored" if "--stored" in argv else "fixed" if "--fixed" in argv else "dynamic" if "--dynamic" in argv else "auto"
@@ -440,6 +444,8 @@ if __name__ == "__main__":
     data = open(source, "rb").read()
     level = next((int(a[1]) for a in argv if len(a) == 2 and a[0] == "-" and a[1] in "123456789"), 6)
     packed = gzip_bytes(data, name=source.replace("\\", "/").split("/")[-1], mode=mode, level=level)
+    if to_stdout:
+        sys.exit(sys.stdout.buffer.write(packed) and 0)
     open(out, "wb").write(packed)
     ratio = 100 * (1 - len(packed) / len(data)) if data else 0
     print(f"{source}: {len(data)} -> {len(packed)} bytes ({ratio:.1f}% smaller), {mode} blocks, level {level}")

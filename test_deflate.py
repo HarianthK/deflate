@@ -186,6 +186,21 @@ finally:
         os.remove(name)
 print("-t reports each file and fails if any is broken")
 
+# -c, as gzip's: compressed bytes on standard output and nothing else, then read back the same way.
+open("t-pipe.txt", "wb").write(good_data)
+try:
+    packed = subprocess.run([sys.executable, deflate.__file__, "t-pipe.txt", "-c"], capture_output=True)
+    assert packed.returncode == 0 and gzip.decompress(packed.stdout) == good_data, packed.stderr
+    open("t-pipe.txt.gz", "wb").write(packed.stdout)
+    back = subprocess.run([sys.executable, deflate.__file__, "-d", "-c", "t-pipe.txt.gz"], capture_output=True)
+    assert back.returncode == 0 and back.stdout == good_data, back.stderr
+    assert not os.path.exists("t-pipe.txt.gz.gz") and not os.path.exists("t-pipe"), "-c wrote a file"
+finally:
+    for name in ("t-pipe.txt", "t-pipe.txt.gz"):
+        if os.path.exists(name):
+            os.remove(name)
+print("-c writes to standard output, both ways")
+
 # Levels, as gzip's: each is read back by zlib, 1 is bigger than 6 and 9 no bigger (a deeper search
 # is not always smaller: here 8 can lose to 7), 6 is the default, and the header says which end.
 text = CASES["english"] + CASES["own source"]
