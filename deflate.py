@@ -1,6 +1,7 @@
 # Writes a real gzip file: LZ77 matching, then Huffman coding, then the DEFLATE bit layout.
 # Run: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], -d FILE.gz to read one back, -c for stdout.
 import heapq
+import os
 import struct
 import sys
 import zlib
@@ -371,6 +372,21 @@ def inflate(data, pos=0):
     return bytes(out), r.pos
 
 
+def stored_name(data):
+    # The name in the first member's header (FNAME), cut to a bare file name, since a crafted one
+    # such as ../../x would otherwise write outside the folder; None if there is no usable name.
+    if len(data) < 10 or data[:3] != b"\x1f\x8b\x08" or not data[3] & 8:
+        return None
+    pos = 10
+    if data[3] & 4:
+        if len(data) < 12:
+            return None
+        pos += 2 + struct.unpack("<H", data[10:12])[0]
+    end = data.find(b"\0", pos)
+    name = os.path.basename(data[pos:end].decode("latin-1").replace("\\", "/")) if end >= 0 else ""
+    return name if name not in ("", ".", "..") else None
+
+
 def gunzip(data):
     # Gzip files joined end to end (cat a.gz b.gz) are one valid file, read as the parts joined.
     out, pos = b"", 0
@@ -427,13 +443,17 @@ if __name__ == "__main__":
     # -c, as gzip's: the bytes go to standard output and nothing else is printed, so it pipes.
     to_stdout = "-c" in argv
     if "-d" in argv:
+        try:
+            raw = open(args[0], "rb").read()
+            data = gunzip(raw)
+        except (OSError, ValueError) as e:
+            sys.exit(f"deflate: {args[0]}: {e}")
         out = argv[argv.index("-o") + 1] if "-o" in argv else args[0].removesuffix(".gz")
+        # -N, as gzip's: name the output after the name stored inside the file, in the same folder.
+        if "-N" in argv and "-o" not in argv and stored_name(raw):
+            out = os.path.join(os.path.dirname(args[0]), stored_name(raw))
         if out == args[0] and not to_stdout:
             sys.exit("deflate: give -o, since the output would overwrite the input")
-        try:
-            data = gunzip(open(args[0], "rb").read())
-        except ValueError as e:
-            sys.exit(f"deflate: {args[0]}: {e}")
         if to_stdout:
             sys.exit(sys.stdout.buffer.write(data) and 0)
         open(out, "wb").write(data)

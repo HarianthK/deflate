@@ -201,6 +201,25 @@ finally:
             os.remove(name)
 print("-c writes to standard output, both ways")
 
+# -N names the output after the name stored inside the file; a crafted name that climbs out of the
+# folder is cut down to its last part, so it lands beside the .gz and nowhere else.
+here = os.path.dirname(os.path.abspath(deflate.__file__))
+made = [os.path.join(here, n) for n in ("t-renamed.gz", "t-original.txt", "t-evil.gz", "t-evil.txt")]
+try:
+    open(made[0], "wb").write(deflate.gzip_bytes(good_data, name="t-original.txt"))
+    run = subprocess.run([sys.executable, deflate.__file__, "-d", "-N", made[0]], capture_output=True, text=True)
+    assert run.returncode == 0 and open(made[1], "rb").read() == good_data, run
+    open(made[2], "wb").write(deflate.gzip_bytes(good_data, name="../t-evil.txt"))
+    run = subprocess.run([sys.executable, deflate.__file__, "-d", "-N", made[2]], capture_output=True, text=True)
+    assert run.returncode == 0 and os.path.exists(made[3]), run
+    assert not os.path.exists(os.path.join(os.path.dirname(here), "t-evil.txt")), "-N wrote outside the folder"
+    assert deflate.stored_name(gzip.compress(b"x")) is None and deflate.stored_name(b"") is None
+finally:
+    for name in made + [os.path.join(os.path.dirname(here), "t-evil.txt")]:
+        if os.path.exists(name):
+            os.remove(name)
+print("-N restores the stored name, and only inside the folder")
+
 # Levels, as gzip's: each is read back by zlib, 1 is bigger than 6 and 9 no bigger (a deeper search
 # is not always smaller: here 8 can lose to 7), 6 is the default, and the header says which end.
 text = CASES["english"] + CASES["own source"]
