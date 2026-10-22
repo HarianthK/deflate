@@ -51,6 +51,7 @@ there; DOCS.md has the measurements, and the likely reason for what is left.
     python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic]
     python deflate.py -d FILE.gz [-o OUT]
     python deflate.py -t FILE.gz ...      # check files, as gzip -t, writing nothing
+    python deflate.py -l FILE.gz ...      # sizes and ratio, as gzip -l, without inflating (-N: stored name)
     python deflate.py FILE -c > FILE.gz   # -c writes to standard output, with -d too
     python deflate.py -d -N FILE.gz       # -N names the output after the name stored inside
     python test_deflate.py

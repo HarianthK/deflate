@@ -398,6 +398,17 @@ def gunzip(data):
 
 
 def gunzip_member(data, pos):
+    out, pos = inflate(data, gzip_header(data, pos))
+    if len(data) < pos + 8:
+        raise ValueError("the stream ends early")
+    crc, size = struct.unpack("<II", data[pos:pos + 8])
+    if crc != zlib.crc32(out) or size != len(out) & 0xFFFFFFFF:
+        raise ValueError("the CRC or length in the trailer does not match the data")
+    return out, pos + 8
+
+
+def gzip_header(data, pos):
+    # Where the deflate data starts, past the header that begins at pos.
     if data[pos:pos + 3] != b"\x1f\x8b\x08":
         raise ValueError("not a gzip file" if pos == 0 else f"bytes after the gzip data at offset {pos} are not another member")
     # The header is checked for length as it is read: a file cut short there is reported, not crashed on.
@@ -416,20 +427,14 @@ def gunzip_member(data, pos):
             pos = end + 1
     if flags & 2:
         pos += 2
-    out, pos = inflate(data, pos)
-    if len(data) < pos + 8:
-        raise ValueError("the stream ends early")
-    crc, size = struct.unpack("<II", data[pos:pos + 8])
-    if crc != zlib.crc32(out) or size != len(out) & 0xFFFFFFFF:
-        raise ValueError("the CRC or length in the trailer does not match the data")
-    return out, pos + 8
+    return pos
 
 
 if __name__ == "__main__":
     argv = sys.argv[1:]
     args = [a for a in argv if not a.startswith("-")]
     if not args:
-        sys.exit("usage: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], -d FILE.gz [-o OUT], or -t FILE.gz ...")
+        sys.exit("usage: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], -d FILE.gz [-o OUT], -t FILE.gz ..., or -l FILE.gz ...")
     if "-t" in argv:
         # As gzip -t: read each file all the way through, CRC included, and write nothing.
         bad = 0
@@ -439,6 +444,28 @@ if __name__ == "__main__":
             except (OSError, ValueError) as e:
                 print(f"{name}: {e}", file=sys.stderr)
                 bad += 1
+        sys.exit(1 if bad else 0)
+    if "-l" in argv:
+        # As gzip -l, from the header and the size in the last 4 bytes, without inflating; like gzip's,
+        # that size is mod 4 GiB, and the ratio leaves out the header and trailer.
+        print(f"{'compressed':>10} {'uncompressed':>12}  ratio  uncompressed_name")
+        bad = 0
+        for name in args:
+            try:
+                raw = open(name, "rb").read()
+                body = len(raw) - gzip_header(raw, 0) - 8
+                if body < 0:
+                    raise ValueError("the stream ends early")
+            except (OSError, ValueError) as e:
+                print(f"{name}: {e}", file=sys.stderr)
+                bad += 1
+                continue
+            size = struct.unpack("<I", raw[-4:])[0]
+            ratio = 100 * (size - body) / size if size else 0
+            shown = name.removesuffix(".gz")
+            if "-N" in argv and stored_name(raw):
+                shown = os.path.join(os.path.dirname(name), stored_name(raw))
+            print(f"{len(raw):>10} {size:>12} {ratio:5.1f}%  {shown}")
         sys.exit(1 if bad else 0)
     # -c, as gzip's: the bytes go to standard output and nothing else is printed, so it pipes.
     to_stdout = "-c" in argv

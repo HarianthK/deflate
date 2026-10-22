@@ -201,6 +201,24 @@ finally:
             os.remove(name)
 print("-c writes to standard output, both ways")
 
+# -l, as gzip's: sizes from the trailer, the stored name when there is one, and an error, not a
+# crash, for a file that is not gzip at all.
+open("t-list.gz", "wb").write(deflate.gzip_bytes(good_data, name="inside.txt"))
+open("t-plain.gz", "wb").write(good_data)
+try:
+    run = subprocess.run([sys.executable, deflate.__file__, "-l", "t-list.gz", "t-plain.gz"], capture_output=True, text=True)
+    packed = os.path.getsize("t-list.gz")
+    body = packed - 10 - len("inside.txt\0") - 8
+    row = run.stdout.splitlines()[1].split()
+    assert row == [str(packed), str(len(good_data)), f"{100 * (1 - body / len(good_data)):.1f}%", "t-list"], row
+    assert run.returncode == 1 and "t-plain.gz: not a gzip file" in run.stderr and "Traceback" not in run.stderr, run
+    run = subprocess.run([sys.executable, deflate.__file__, "-l", "-N", "t-list.gz"], capture_output=True, text=True)
+    assert run.stdout.splitlines()[1].split()[3] == "inside.txt", run.stdout
+finally:
+    for name in ("t-list.gz", "t-plain.gz"):
+        os.remove(name)
+print("-l lists sizes, ratio and the stored name")
+
 # -N names the output after the name stored inside the file; a crafted name that climbs out of the
 # folder is cut down to its last part, so it lands beside the .gz and nowhere else.
 here = os.path.dirname(os.path.abspath(deflate.__file__))
