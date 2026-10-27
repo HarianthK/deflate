@@ -201,3 +201,50 @@ text, level 8 once came out three bytes bigger than level 7, because each match 
 chosen greedily and a longer one now can cost a better one later. The test now
 asks only that level 1 is bigger than 6 and 9 is no bigger than 6.
 
+
+## Zip is DEFLATE with a table of contents
+
+A gzip file holds one stream. A zip archive holds many, each compressed on its
+own, which is what lets one file come out without reading the rest. Each
+member is a local header (name, method, CRC-32, sizes, a DOS time), then its
+data. After the last one comes the central directory, the same facts again
+for every member plus where its local header starts, and last an end record
+saying where the directory is. A reader starts at the back: the end record is
+22 bytes, but an archive comment of up to 64 KiB may follow it, so `members`
+searches the last 64 KiB for its signature.
+
+The central directory is the one to believe. A writer that cannot seek back,
+like `zipfile` writing to a pipe, sets flag bit 3 and leaves the local
+header's sizes as zero, writing them after the data instead. And the local
+header may carry a different extra field from the central one (`tar` does
+this), so where the data starts is worked out from the local header's own
+name and extra lengths.
+
+Each file is deflated, then stored instead if that came out no smaller, as
+zip tools do: random bytes, and text under about 20 bytes, are stored. Names
+with any non-ASCII character set flag bit 11, which says UTF-8; without it a
+reader assumes the old DOS code page and `café` comes out garbled. Times are
+MS-DOS times, local, in two-second steps, with nothing before 1980. The first
+version clamped to 1980 in UTC, which in Arizona is 31 December 1979, and
+wrote the year 1980 with month 12; the clamp is in local time now.
+
+Extracting is a trust boundary, as reading a gzip stream is. A member named
+`../evil`, `/etc/evil`, `\evil`, `C:evil` or `a/D:/evil` would be written
+outside the folder it is extracted to (zip slip), and on Windows a part with
+a colon makes `os.path.join` jump to another drive. All of them are refused
+before anything is written. Encrypted members, methods other than stored and
+DEFLATE, and ZIP64 (archives or members over 4 GiB) are refused with a reason.
+
+`test_pkzip.py` builds an archive of files and folders with a non-ASCII name,
+an empty file and random bytes, which `zipfile` and Windows' `tar` (libarchive)
+must both read and extract; then reads archives `zipfile` wrote stored, at
+levels 1 and 9, with a comment, and to a pipe, one `tar` wrote, and `git
+archive` of this repository, checked file by file against git; then refuses
+six zip-slip names, damaged data, half an archive, bzip2, an encrypted flag and
+a member cut short. Eleven breakages fail it, among them the CRC not checked,
+the local extra field skipped, the UTF-8 flag not set, a backslash or drive
+name allowed, and the end record looked for only where it sits without a
+comment. Two checks had to go: one for DEFLATE running past a member's size
+could never fire, since the data is cut to that size before inflating, and
+it was deleted; and directories were never extracted in a test until the
+breakage for them passed.

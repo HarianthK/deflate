@@ -27,6 +27,11 @@ patterns than the rare ones.
 - The reading half too: `inflate` and `gunzip` decode any DEFLATE stream,
   including every level and strategy zlib writes, and refuse broken ones with
   a reason rather than misreading them.
+- Zip archives, in `pkzip.py`: writing them (each file deflated, or stored if
+  that is smaller), and listing, testing and extracting them. Python's
+  `zipfile` and Windows' `tar` read what it writes, it reads what they and
+  `git archive` write, and it refuses names that would extract outside the
+  folder.
 
 ## How it compares
 
@@ -55,6 +60,9 @@ there; DOCS.md has the measurements, and the likely reason for what is left.
     python deflate.py FILE -c > FILE.gz   # -c writes to standard output, with -d too
     python deflate.py -d -N FILE.gz       # -N names the output after the name stored inside
     python test_deflate.py
+    python pkzip.py OUT.zip FILE|DIR... [-1..-9]
+    python pkzip.py -l | -t | -x ARCHIVE.zip [-d DIR]
+    python test_pkzip.py
 
 ## Notes
 
