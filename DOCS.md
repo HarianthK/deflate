@@ -102,6 +102,50 @@ tables, when the statistics of the text change, where this writes one block with
 one set of tables for the whole file. That is the next thing to measure, not a
 finding.
 
+### It was not block splitting
+
+Measured, it was not. zlib -9 writes one block for every one of these files
+(its buffer holds 16,384 symbols, more than any of them makes), so it has no
+tables to switch. Reading zlib's own stream back into its tokens and pricing
+them with this Huffman code gives its size to the byte, and pricing this
+LZ77's tokens at level 9 gives the same size again, give or take 40 bytes. So
+at `-9` against `-9` there was no gap. The table compared our default level, 6,
+against gzip's 9, and the depth table above did the same.
+
+Block splitting was still worth doing. The tokens are cut into steps of 2,048,
+and a block grows a step at a time while one set of tables for both costs
+fewer bits than two. Otherwise the block ends and a new one starts. Each block
+is then the cheapest of stored, fixed and dynamic. Prices come from symbol
+counts, not from writing the block, and the test checks each price equals
+the bits `write_block` really writes. At level 9 against zlib -9:
+
+| file | one block | steps of 1,024 | 2,048 | 4,096 |
+| --- | --- | --- | --- | --- |
+| ember DOCS.md | 100.01% | 99.11% | 99.11% | 99.57% |
+| ember vm.rs | 100.33% | 100.20% | 99.90% | 100.20% |
+| deflate.py | 100.03% | 100.03% | 99.61% | 100.03% |
+| resolve.py | 100.00% | 99.71% | 99.36% | 100.00% |
+| graft.py | 99.99% | 99.99% | 99.87% | 99.87% |
+
+Steps of 2,048 are best on all five, and the time is the same as before,
+since LZ77 now runs once, not once each for fixed and dynamic. Where the
+input really changes, the gain is bigger. Text, then 20 KB of noise, then
+text in other letters comes to 31,996 bytes in six blocks (the noise stored,
+mid-stream), against 34,768 as the best single block, and 96% of gzip -9.
+
+Growing greedily is not guaranteed to beat one block for the whole input. A
+fallback to one block was written for that, but it never fired in 300
+random mixes of runs with different alphabets, so it was taken out. The
+test still checks, on every input, that auto is no bigger than any single
+block.
+
+Eight breakages fail the test: never splitting, every block marked final, a
+stored block mid-stream marked final, stored bytes counted by tokens, stored
+priced in bytes, the merge test reversed, the end-of-block code not priced,
+and the dynamic header not priced. The end-of-block one first passed, since
+one code more or less never changed a plan, and the price check was added
+for it.
+
 ## The check is the whole point
 
 Every test of the writer writes a file and then asks somebody else to read

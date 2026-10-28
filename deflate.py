@@ -175,46 +175,106 @@ def run_lengths(table):
 
 
 def deflate(data, mode="auto", level=6):
-    # Incompressible input costs bits to Huffman-code, so the smallest of the three wins.
     if level not in LEVELS:
         raise ValueError(f"the level is 1 to 9, not {level}")
-    if mode == "auto":
-        return min((deflate(data, m, level) for m in ("stored", "fixed", "dynamic")), key=len)
     w = BitWriter()
     if mode == "stored":
-        blocks = [data[s:s + 65535] for s in range(0, len(data), 65535)] or [b""]
-        for n, block in enumerate(blocks):
-            w.write(1 if n == len(blocks) - 1 else 0, 1)
-            w.write(0, 2)
-            w.align()
-            w.out += struct.pack("<HH", len(block), len(block) ^ 0xFFFF) + block
+        write_stored(w, data, True)
         return bytes(w.out)
-
     tokens = lz77(data, *LEVELS[level])
-    lit_counts, dist_counts = Counter(), Counter()
+    if mode == "auto":
+        plan = split(tokens)
+    else:
+        plan = [(len(tokens), mode)]
+    start, at = 0, 0
+    for n, (end, kind) in enumerate(plan):
+        size = sum(1 if isinstance(t, int) else t[0] for t in tokens[start:end])
+        write_block(w, tokens[start:end], data[at:at + size], kind, n == len(plan) - 1)
+        start, at = end, at + size
+    w.align()
+    return bytes(w.out)
+
+
+def write_stored(w, data, final):
+    pieces = [data[s:s + 65535] for s in range(0, len(data), 65535)] or [b""]
+    for n, piece in enumerate(pieces):
+        w.write(1 if final and n == len(pieces) - 1 else 0, 1)
+        w.write(0, 2)
+        w.align()
+        w.out += struct.pack("<HH", len(piece), len(piece) ^ 0xFFFF) + piece
+
+
+def counts_of(tokens):
+    # Symbol counts and extra bits: everything a block's size depends on, and they add across blocks.
+    lit_counts, dist_counts, extra, size = Counter(), Counter(), 0, 0
     for token in tokens:
         if isinstance(token, int):
             lit_counts[token] += 1
+            size += 1
         else:
             length, dist = token
-            lit_counts[code_for(LENGTH_CODES, length)[0]] += 1
-            dist_counts[code_for(DISTANCE_CODES, dist)[0]] += 1
-    lit_counts[256] += 1  # end of block
+            symbol, _, length_bits = code_for(LENGTH_CODES, length)
+            lit_counts[symbol] += 1
+            dist_symbol, _, dist_bits = code_for(DISTANCE_CODES, dist)
+            dist_counts[dist_symbol] += 1
+            extra += length_bits + dist_bits
+            size += length
+    return lit_counts, dist_counts, extra, size
 
+
+def dynamic_tables(lit_counts, dist_counts):
+    # The code lengths for a dynamic block, and the run-length coded header that carries them.
+    lit_lengths = lengths_from(lit_counts + Counter({256: 1}), 15)
+    dist_lengths = lengths_from(dist_counts, 15) or {0: 1}
+    hlit = max(max(lit_lengths), 256) + 1
+    hdist = max(dist_lengths) + 1
+    items = run_lengths([lit_lengths.get(s, 0) for s in range(hlit)] + [dist_lengths.get(s, 0) for s in range(hdist)])
+    cl_lengths = lengths_from(Counter(symbol for symbol, _, _ in items), 7)
+    hclen = max(4, max((i + 1 for i, s in enumerate(CODE_LENGTH_ORDER) if cl_lengths.get(s)), default=4))
+    return lit_lengths, dist_lengths, hlit, hdist, hclen, items, cl_lengths
+
+
+def block_bits(counts):
+    # The cheapest block type for these counts and its size in bits, worked out without writing it.
+    lit_counts, dist_counts, extra, size = counts
+    lit_lengths, dist_lengths, _, _, hclen, items, cl_lengths = dynamic_tables(lit_counts, dist_counts)
+    body = lambda lit, dist: (sum(n * lit[s] for s, n in lit_counts.items()) + lit[256]
+                              + sum(n * dist[s] for s, n in dist_counts.items()) + extra)
+    dynamic = 17 + 3 * hclen + sum(cl_lengths[s] + bits for s, _, bits in items) + body(lit_lengths, dist_lengths)
+    fixed = 3 + body(FIXED_LIT_LENGTHS, FIXED_DIST_LENGTHS)
+    stored = max(1, -(-size // 65535)) * 40 + 8 * size  # 3 header bits, up to 7 to the byte, 4 bytes of lengths
+    return min((stored, "stored"), (fixed, "fixed"), (dynamic, "dynamic"))
+
+
+def split(tokens, step=2048):
+    # Grows each block a step of tokens at a time while one set of tables is cheaper than two, and starts a
+    # new block where the text changes enough that it is not. Returns (end token, block type) for each block.
+    plan, block = [], None
+    for start in range(0, max(len(tokens), 1), step):
+        piece = counts_of(tokens[start:start + step])
+        if block is not None:
+            joined = tuple(a + b for a, b in zip(block, piece))
+            if block_bits(joined)[0] <= block_bits(block)[0] + block_bits(piece)[0]:
+                block = joined
+                continue
+            plan.append((start, block_bits(block)[1]))
+        block = piece
+    plan.append((len(tokens), block_bits(block)[1]))
+    return plan
+
+
+def write_block(w, tokens, data, mode, final):
+    if mode == "stored":
+        write_stored(w, data, final)
+        return
+    lit_counts, dist_counts, _, _ = counts_of(tokens)
     if mode == "fixed":
         lit_lengths, dist_lengths = FIXED_LIT_LENGTHS, FIXED_DIST_LENGTHS
-        w.write(1, 1)
+        w.write(int(final), 1)
         w.write(1, 2)
     else:
-        lit_lengths = lengths_from(lit_counts, 15)
-        dist_lengths = lengths_from(dist_counts, 15) or {0: 1}
-        hlit = max(max(lit_lengths), 256) + 1
-        hdist = max(dist_lengths) + 1
-        table = [lit_lengths.get(s, 0) for s in range(hlit)] + [dist_lengths.get(s, 0) for s in range(hdist)]
-        items = run_lengths(table)
-        cl_lengths = lengths_from(Counter(symbol for symbol, _, _ in items), 7)
-        hclen = max(4, max((i + 1 for i, s in enumerate(CODE_LENGTH_ORDER) if cl_lengths.get(s)), default=4))
-        w.write(1, 1)
+        lit_lengths, dist_lengths, hlit, hdist, hclen, items, cl_lengths = dynamic_tables(lit_counts, dist_counts)
+        w.write(int(final), 1)
         w.write(2, 2)
         w.write(hlit - 257, 5)
         w.write(hdist - 1, 5)
@@ -242,8 +302,6 @@ def deflate(data, mode="auto", level=6):
             if extra_bits:
                 w.write(extra, extra_bits)
     w.write_code(lit_codes[256], lit_lengths[256])
-    w.align()
-    return bytes(w.out)
 
 
 def gzip_bytes(data, name=None, mode="auto", level=6):

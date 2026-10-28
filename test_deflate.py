@@ -21,6 +21,9 @@ CASES = {
     "far match": b"needle" + os.urandom(30000) + b"needle",
     "max length match": b"z" * 258 + b"q" + b"z" * 258,
     "random": bytes(random.randrange(256) for _ in range(20000)),
+    # Text, noise, then text with other letters: one set of code tables suits none of the three parts.
+    "text, noise, text": b"the quick brown fox jumps over the lazy dog. " * 300 + random.Random(1).randbytes(20000)
+                         + bytes(random.Random(2).choices(b"QXZJKVW0123456789", k=20000)),
 }
 
 
@@ -43,12 +46,31 @@ for label, data in CASES.items():
             print("FAIL", e)
             failures += 1
     theirs = len(gzip.compress(data, 9))
-    assert sizes["auto"] == min(sizes.values()), f"{label}: auto picked {sizes['auto']}, best was {min(sizes.values())}"
+    # Split into blocks of its own choosing, auto is never bigger than one block of any type, and can be smaller.
+    assert sizes["auto"] <= min(sizes.values()), f"{label}: auto made {sizes['auto']}, one block made {min(sizes.values())}"
     # Compared without a stored file name, as gzip.compress writes none; with it, six bytes
     # of every row were the name "t.bin", not compression.
     ours = len(deflate.gzip_bytes(data))
     print(f"{label:18} {len(data):>7} bytes -> ours {ours:>7}  gzip -9 {theirs:>7}  "
           f"({100 * ours / theirs:.0f}% of theirs)")
+
+# The splitter decides from prices it works out without writing; each must be the bits a block really takes.
+for label, data in CASES.items():
+    tokens = deflate.lz77(data)
+    bits, kind = deflate.block_bits(deflate.counts_of(tokens))
+    w = deflate.BitWriter()
+    deflate.write_block(w, tokens, data, kind, True)
+    assert bits == len(w.out) * 8 + w.count, (label, kind, bits, len(w.out) * 8 + w.count)
+print("each block's price is the bits it takes")
+
+# Each part of the mixed input gets a block of its own: the noise stored, mid-stream, and the rest with new tables.
+mixed = CASES["text, noise, text"]
+plan = deflate.split(deflate.lz77(mixed))
+kinds = [kind for _, kind in plan]
+assert "stored" in kinds[:-1] and kinds.count("dynamic") >= 2, plan
+one_block = min(len(deflate.deflate(mixed, m)) for m in ("stored", "fixed", "dynamic"))
+assert len(deflate.deflate(mixed)) < 0.95 * one_block, (len(deflate.deflate(mixed)), one_block)
+print(f"the mixed input is split into {len(plan)} blocks ({', '.join(kinds)}), {len(deflate.deflate(mixed))} bytes against {one_block} as one")
 
 # A three-byte repeat from more than 4096 bytes back costs more as a match than as three
 # literals, so, as in zlib, it must not be taken; a nearer one still must be.

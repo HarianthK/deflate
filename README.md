@@ -18,9 +18,11 @@ patterns than the rare ones.
 - LZ77 matching over a 32 KiB window, with a hash of the next three bytes.
 - Huffman code lengths from a real tree, capped at the depth the format
   allows, then turned into canonical codes.
-- All three block types: stored, fixed-table and dynamic-table. By default it
-  builds all three and keeps the smallest, which is why incompressible input
-  never grows by more than the 5 bytes a stored block costs.
+- All three block types: stored, fixed-table and dynamic-table. By default
+  the input is cut into blocks where its statistics change, and each block is
+  the cheapest of the three, priced exactly without writing it. That is why
+  incompressible input never grows by more than the 5 bytes a stored block
+  costs.
 - Levels `-1` to `-9`, as gzip has: a shallower search for speed or a deeper
   one for size, 6 by default.
 - The gzip envelope: header, CRC32 and length.
@@ -44,12 +46,15 @@ programs read them back. Sizes against `gzip -9`:
 | 70 KB of one repeated byte | 102 | 103 |
 | 20 KB of random bytes | 20023 | 20028 |
 | empty, and one byte | 20, 21 | 20, 21 |
-| ember's DOCS.md, 22 KB of prose | 9334 | 9302 |
-| ember's vm.rs, 36 KB of Rust | 8288 | 8189 |
+| text, then noise, then other text, 54 KB | 32014 | 33195 |
+| ember's DOCS.md, 28 KB of prose | 11069 | 11134 |
+| ember's vm.rs, 59 KB of Rust | 12910 | 12875 |
 
-Level with gzip or smaller on repetitive input, and within about one percent
-on real text. Lazy matching and a deeper search closed most of the gap that was
-there; DOCS.md has the measurements, and the likely reason for what is left.
+That is our default level against gzip's best. At `-9` against `-9`, vm.rs is
+12862 bytes to gzip's 12875. Smaller or level on every input but one,
+because a file is cut into blocks, each with its own code tables, where its
+contents change. DOCS.md has the measurements, and how the old one percent
+gap turned out to be a level mismatch, not block splitting.
 
 ## Running it
 
