@@ -1,5 +1,5 @@
 # Writes a real gzip file: LZ77 matching, then Huffman coding, then the DEFLATE bit layout.
-# Run: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], -d FILE.gz to read one back, -c for stdout.
+# Run: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], -d FILE.gz to read one back, -c for stdout, -z [--dict FILE] for zlib.
 import heapq
 import os
 import struct
@@ -65,9 +65,10 @@ def code_for(table, value):
     raise ValueError(value)
 
 
-def lz77(data, chain_limit=CHAIN, lazy=True):
-    # Longest match in the last 32 KiB, found by hashing the next three bytes.
-    heads, tokens, i = {}, [], 0
+def lz77(data, chain_limit=CHAIN, lazy=True, start=0):
+    # Longest match in the last 32 KiB, found by hashing the next three bytes. The bytes before
+    # start are a preset dictionary: matched against, never sent.
+    heads, tokens, i = {}, [], start
 
     def remember(pos):
         key = bytes(data[pos:pos + MIN_MATCH])
@@ -95,6 +96,8 @@ def lz77(data, chain_limit=CHAIN, lazy=True):
             return 0, 0
         return best_len, best_dist
 
+    for pos in range(max(0, start - WINDOW), start):
+        remember(pos)
     while i < len(data):
         best_len, best_dist = longest(i)
         remember(i)
@@ -174,14 +177,14 @@ def run_lengths(table):
     return out
 
 
-def deflate(data, mode="auto", level=6):
+def deflate(data, mode="auto", level=6, dictionary=b""):
     if level not in LEVELS:
         raise ValueError(f"the level is 1 to 9, not {level}")
     w = BitWriter()
     if mode == "stored":
         write_stored(w, data, True)
         return bytes(w.out)
-    tokens = lz77(data, *LEVELS[level])
+    tokens = lz77(dictionary[-WINDOW:] + data, *LEVELS[level], start=len(dictionary[-WINDOW:]))
     if mode == "auto":
         plan = split(tokens)
     else:
@@ -313,6 +316,39 @@ def gzip_bytes(data, name=None, mode="auto", level=6):
     return header + deflate(data, mode, level) + struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
 
 
+def zlib_bytes(data, mode="auto", level=6, dictionary=b""):
+    # RFC 1950: two header bytes that are a multiple of 31, the dictionary's Adler-32 if there is
+    # one, the DEFLATE stream, then the data's Adler-32, all big-endian. FLEVEL is set as zlib sets it.
+    flevel = 0 if level == 1 else 1 if level < 6 else 2 if level == 6 else 3
+    flg = flevel << 6 | (0x20 if dictionary else 0)
+    flg |= 31 - (0x78 << 8 | flg) % 31
+    head = bytes([0x78, flg]) + (struct.pack(">I", zlib.adler32(dictionary)) if dictionary else b"")
+    return head + deflate(data, mode, level, dictionary) + struct.pack(">I", zlib.adler32(data))
+
+
+def unzlib(data, dictionary=None):
+    if len(data) < 2 or data[0] & 15 != 8 or data[0] >> 4 > 7 or (data[0] << 8 | data[1]) % 31:
+        raise ValueError("not a zlib stream")
+    pos = 2
+    if data[1] & 0x20:
+        if len(data) < 6:
+            raise ValueError("the stream ends early")
+        wanted = struct.unpack(">I", data[2:6])[0]
+        if dictionary is None:
+            raise ValueError(f"the stream needs a preset dictionary, the one with Adler-32 {wanted:08x}")
+        if zlib.adler32(dictionary) != wanted:
+            raise ValueError(f"the stream needs the dictionary with Adler-32 {wanted:08x}, not {zlib.adler32(dictionary):08x}")
+        pos = 6
+    out, pos = inflate(data, pos, history=(dictionary or b"")[-WINDOW:])
+    if len(data) < pos + 4:
+        raise ValueError("the stream ends early")
+    if struct.unpack(">I", data[pos:pos + 4])[0] != zlib.adler32(out):
+        raise ValueError("the Adler-32 in the trailer does not match the data")
+    if pos + 4 != len(data):
+        raise ValueError(f"bytes after the zlib stream at offset {pos + 4}")
+    return out
+
+
 class BitReader:
     # The mirror of BitWriter: values come off each byte from its low end.
     def __init__(self, data, pos=0):
@@ -389,9 +425,10 @@ def read_tables(r):
     return decoder(dict(enumerate(lengths[:hlit]))), decoder(dict(enumerate(lengths[hlit:])))
 
 
-def inflate(data, pos=0):
-    # Returns the bytes and where the stream ended, since a gzip trailer follows it.
-    r, out, final = BitReader(data, pos), bytearray(), 0
+def inflate(data, pos=0, history=b""):
+    # Returns the bytes and where the stream ended, since a gzip trailer follows it. History is
+    # a preset dictionary: matches may reach back into it, but it is not part of the output.
+    r, out, final = BitReader(data, pos), bytearray(history), 0
     while not final:
         final, kind = r.read(1), r.read(2)
         if kind == 0:
@@ -427,7 +464,7 @@ def inflate(data, pos=0):
             back = out[-distance:]
             out += back * (length // distance) + back[:length % distance]
     r.align()
-    return bytes(out), r.pos
+    return bytes(out[len(history):]), r.pos
 
 
 def stored_name(data):
@@ -490,15 +527,22 @@ def gzip_header(data, pos):
 
 if __name__ == "__main__":
     argv = sys.argv[1:]
+    # --dict FILE: a preset dictionary, which only zlib streams (-z, as pigz -z) can carry.
+    dictionary = open(argv.pop(argv.index("--dict") + 1), "rb").read() if "--dict" in argv else None
     args = [a for a in argv if not a.startswith("-")]
     if not args:
-        sys.exit("usage: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic], -d FILE.gz [-o OUT], -t FILE.gz ..., or -l FILE.gz ...")
+        sys.exit("usage: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic] [-z [--dict FILE]], -d FILE.gz [-o OUT], -t FILE.gz ..., or -l FILE.gz ...")
+
+    def unpack(raw):
+        # Gzip by its magic number, anything else as zlib.
+        return gunzip(raw) if raw[:2] == b"\x1f\x8b" else unzlib(raw, dictionary)
+
     if "-t" in argv:
         # As gzip -t: read each file all the way through, CRC included, and write nothing.
         bad = 0
         for name in args:
             try:
-                print(f"{name}: OK, {len(gunzip(open(name, 'rb').read()))} bytes")
+                print(f"{name}: OK, {len(unpack(open(name, 'rb').read()))} bytes")
             except (OSError, ValueError) as e:
                 print(f"{name}: {e}", file=sys.stderr)
                 bad += 1
@@ -530,10 +574,10 @@ if __name__ == "__main__":
     if "-d" in argv:
         try:
             raw = open(args[0], "rb").read()
-            data = gunzip(raw)
+            data = unpack(raw)
         except (OSError, ValueError) as e:
             sys.exit(f"deflate: {args[0]}: {e}")
-        out = argv[argv.index("-o") + 1] if "-o" in argv else args[0].removesuffix(".gz")
+        out = argv[argv.index("-o") + 1] if "-o" in argv else args[0].removesuffix(".gz").removesuffix(".zz")
         # -N, as gzip's: name the output after the name stored inside the file, in the same folder.
         if "-N" in argv and "-o" not in argv and stored_name(raw):
             out = os.path.join(os.path.dirname(args[0]), stored_name(raw))
@@ -545,10 +589,15 @@ if __name__ == "__main__":
         sys.exit(print(f"{args[0]}: {len(data)} bytes to {out}"))
     mode = "stored" if "--stored" in argv else "fixed" if "--fixed" in argv else "dynamic" if "--dynamic" in argv else "auto"
     source = args[0]
-    out = argv[argv.index("-o") + 1] if "-o" in argv else source + ".gz"
+    if dictionary is not None and "-z" not in argv:
+        sys.exit("deflate: --dict needs -z, since a gzip file has nowhere to name its dictionary")
+    out = argv[argv.index("-o") + 1] if "-o" in argv else source + (".zz" if "-z" in argv else ".gz")
     data = open(source, "rb").read()
     level = next((int(a[1]) for a in argv if len(a) == 2 and a[0] == "-" and a[1] in "123456789"), 6)
-    packed = gzip_bytes(data, name=source.replace("\\", "/").split("/")[-1], mode=mode, level=level)
+    if "-z" in argv:
+        packed = zlib_bytes(data, mode=mode, level=level, dictionary=dictionary or b"")
+    else:
+        packed = gzip_bytes(data, name=source.replace("\\", "/").split("/")[-1], mode=mode, level=level)
     if to_stdout:
         sys.exit(sys.stdout.buffer.write(packed) and 0)
     open(out, "wb").write(packed)

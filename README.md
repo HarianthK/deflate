@@ -26,6 +26,12 @@ patterns than the rare ones.
 - Levels `-1` to `-9`, as gzip has: a shallower search for speed or a deeper
   one for size, 6 by default.
 - The gzip envelope: header, CRC32 and length.
+- The zlib envelope too (RFC 1950, what PNG and HTTP's `deflate` use), with
+  `-z` as pigz has it, and preset dictionaries with `--dict FILE`: matches may
+  reach back into bytes both ends already have, so short messages that look
+  alike shrink. Eighteen 80-byte JSON records take 1,383 bytes alone and 396
+  with two earlier records as the dictionary, the same as zlib at `-9`.
+  Python's zlib reads what it writes and the other way round.
 - The reading half too: `inflate` and `gunzip` decode any DEFLATE stream,
   including every level and strategy zlib writes, and refuse broken ones with
   a reason rather than misreading them.
@@ -60,6 +66,7 @@ gap turned out to be a level mismatch, not block splitting.
 
     python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic]
     python deflate.py -d FILE.gz [-o OUT]
+    python deflate.py FILE -z [--dict DICT]   # a zlib stream, FILE.zz; -d and -t read it back, with --dict if it needs one
     python deflate.py -t FILE.gz ...      # check files, as gzip -t, writing nothing
     python deflate.py -l FILE.gz ...      # sizes and ratio, as gzip -l, without inflating (-N: stored name)
     python deflate.py FILE -c > FILE.gz   # -c writes to standard output, with -d too

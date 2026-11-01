@@ -288,5 +288,67 @@ finally:
             os.remove(name)
 print("levels 1 to 9 all read back; sizes by level:", sizes)
 
+# Zlib streams (RFC 1950): Python's zlib reads ours, ours reads its, and the header carries the
+# same level bits zlib writes.
+for label, data in CASES.items():
+    for mode in ("stored", "fixed", "dynamic", "auto"):
+        packed = deflate.zlib_bytes(data, mode)
+        assert zlib.decompress(packed) == data and deflate.unzlib(packed) == data, f"{label} ({mode}): zlib"
+    assert deflate.unzlib(zlib.compress(data, 9)) == data, f"{label}: read zlib's stream wrong"
+for level in range(1, 10):
+    assert deflate.zlib_bytes(b"x", level=level)[:2] == zlib.compress(b"x", level)[:2], f"level {level} header"
+
+# A preset dictionary: matches reach back into bytes both sides already have, so short messages
+# that look alike shrink, and only the dictionary's Adler-32 is sent.
+records = [b'{"user": %d, "event": "page_view", "path": "/products/%d", "agent": "Mozilla/5.0"}' % (n, n * 7)
+           for n in range(20)]
+shared = records[0] + records[1]
+for record in records[2:]:
+    plain, primed = deflate.zlib_bytes(record), deflate.zlib_bytes(record, dictionary=shared)
+    reader = zlib.decompressobj(zdict=shared)
+    assert reader.decompress(primed) == record and reader.eof, "zlib read a primed stream wrong"
+    assert deflate.unzlib(primed, shared) == record
+    assert len(primed) < len(plain) * 0.6, f"the dictionary saved too little: {len(primed)} against {len(plain)}"
+    theirs = zlib.compressobj(9, zdict=shared)
+    assert deflate.unzlib(theirs.compress(record) + theirs.flush(), shared) == record
+assert struct.unpack(">I", primed[2:6])[0] == zlib.adler32(shared) and primed[1] & 0x20
+# Matches reach the whole 32 KiB window back, into a dictionary longer than that.
+far = os.urandom(40000)
+packed = deflate.zlib_bytes(far[1000:1300], dictionary=far)
+assert len(packed) > 300, "matched bytes that fell out of the window"
+packed = deflate.zlib_bytes(far[-32768:-32468], dictionary=far)
+assert len(packed) < 30 and zlib.decompressobj(zdict=far).decompress(packed) == far[-32768:-32468]
+
+good = deflate.zlib_bytes(b"hello hello", dictionary=b"hello")
+read = lambda s: deflate.unzlib(s, b"hello")
+refused(good, "needs a preset dictionary", deflate.unzlib)
+refused(good, "not 062d0216", lambda s: deflate.unzlib(s, b"hellp"))
+refused(good[:-1] + bytes([good[-1] ^ 1]), "Adler-32 in the trailer", read)
+refused(good + b"x", "bytes after", read)
+refused(good[:-2], "ends early", read)
+refused(good[:4], "ends early", read)
+refused(bytes([0x78, good[1] ^ 1]) + good[2:], "not a zlib", read)
+refused(b"\x88\x98" + good[2:], "not a zlib", read)  # a window of 64 KiB, which the format does not have
+refused(b"", "not a zlib", read)
+
+# From the command line: -z writes FILE.zz, -d and -t tell it from gzip by its first bytes.
+open("t-z.txt", "wb").write(records[5])
+open("t-z.dict", "wb").write(shared)
+try:
+    run = subprocess.run([sys.executable, deflate.__file__, "t-z.txt", "-z", "--dict", "t-z.dict"], capture_output=True, text=True)
+    assert run.returncode == 0 and zlib.decompressobj(zdict=shared).decompress(open("t-z.txt.zz", "rb").read()) == records[5], run
+    run = subprocess.run([sys.executable, deflate.__file__, "-t", "t-z.txt.zz"], capture_output=True, text=True)
+    assert run.returncode == 1 and "needs a preset dictionary" in run.stderr, run
+    run = subprocess.run([sys.executable, deflate.__file__, "-d", "t-z.txt.zz", "--dict", "t-z.dict", "-o", "t-z.out"],
+                         capture_output=True, text=True)
+    assert run.returncode == 0 and open("t-z.out", "rb").read() == records[5], run
+    run = subprocess.run([sys.executable, deflate.__file__, "t-z.txt", "--dict", "t-z.dict"], capture_output=True, text=True)
+    assert run.returncode == 1 and "needs -z" in run.stderr and not os.path.exists("t-z.txt.gz"), run
+finally:
+    for name in ("t-z.txt", "t-z.dict", "t-z.txt.zz", "t-z.out", "t-z.txt.gz"):
+        if os.path.exists(name):
+            os.remove(name)
+print("zlib streams and preset dictionaries read back both ways")
+
 print("FAILURES" if failures else "ok")
 sys.exit(1 if failures else 0)

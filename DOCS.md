@@ -292,3 +292,35 @@ comment. Two checks had to go: one for DEFLATE running past a member's size
 could never fire, since the data is cut to that size before inflating, and
 it was deleted; and directories were never extracted in a test until the
 breakage for them passed.
+
+## Zlib, and a dictionary both ends already have
+
+Zlib is the same DEFLATE stream in a smaller envelope than gzip's: two header
+bytes and an Adler-32 at the end instead of a CRC-32, big-endian where gzip is
+little. The first byte says DEFLATE with a 32 KiB window (0x78); the second
+holds two bits of level, a flag for a dictionary, and five check bits that
+make the two bytes together a multiple of 31. That check is all the format
+has instead of a magic number, so `-d` and `-t` call anything that does not
+start with gzip's 1F 8B a zlib stream and let the header check refuse it.
+
+The level bits mean nothing to a reader, but zlib sets them, so the test
+compares our two header bytes with zlib's at all nine levels. They group 1,
+then 2 to 5, then 6, then 7 to 9.
+
+A preset dictionary is bytes the compressor pretends it has already sent.
+LZ77 is primed with the last 32 KiB of them, so the first match can point
+back into the dictionary, and the reader starts with the dictionary as its
+history and cuts it off the front of the output. Only the dictionary's
+Adler-32 travels, as a check that the reader has the right one. It is worth
+it for small messages: a short JSON record has nothing earlier in itself to
+match, so DEFLATE barely shrinks it, but primed with two other records the
+keys and most of the values are matches. Gzip has no field for any of this,
+so `--dict` without `-z` is refused rather than writing a file no gzip could
+read.
+
+Twelve breakages fail the test, among them the dictionary not primed, its
+bytes left in the output, the flag not set, the level bits wrong, the
+dictionary's checksum, the trailer or the header check not checked, and bytes
+after the stream allowed. One check was wrong at first: it meant to show that
+bytes more than 32 KiB back in a long dictionary cannot be matched, and
+picked bytes that were still inside the window.
