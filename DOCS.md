@@ -324,3 +324,54 @@ dictionary's checksum, the trailer or the header check not checked, and bytes
 after the stream allowed. One check was wrong at first: it meant to show that
 bytes more than 32 KiB back in a long dictionary cannot be matched, and
 picked bytes that were still inside the window.
+
+## PNG is zlib with filters in front
+
+A PNG is chunks, each a length, a four-letter name, a body and a CRC, and the
+image itself is one zlib stream cut across the IDAT chunks. So the reader is
+mostly bookkeeping around `unzlib`. What PNG adds is filtering: each row
+starts with a byte naming one of five ways to predict a byte from its
+neighbours (nothing, the byte to the left, the one above, their average, or
+Paeth's pick of the three), and stores the difference instead. A smooth
+image becomes rows of small numbers that LZ77 and Huffman do well on. A
+64x64 gradient takes 147 bytes filtered and 1,123 without.
+
+The writer chooses a filter per row the way libpng does: try all five and
+keep the one whose bytes, read as signed, add up smallest. Read as unsigned,
+a difference of -1 is 255 and looks expensive; that mistake made the 79
+filtered suite images 12% bigger, and a test on a falling ramp now catches
+it. Palette images and bit depths under 8 are written unfiltered, as the
+spec advises, since a neighbouring palette index predicts nothing.
+
+Three letter-case bits in a chunk's name carry meaning. A lowercase first
+letter is ancillary, safe for a reader to skip; an uppercase one is
+critical, and an unknown critical chunk is refused. A lowercase fourth
+letter is safe to copy into an edited file. A rewrite changes only IDAT, so
+it keeps every chunk that is safe to copy, plus the known unsafe ones like
+tRNS and gAMA that describe the pixels and stay true. Rewrites are never
+interlaced: Adam7 costs bytes and buys only a blurry preview while loading.
+
+Adam7 is seven passes over the image, each a sub-image with its own rows and
+its own filter state, starting at a different offset with a different step.
+The reader works out each pass's size, unfilters it like a small image, and
+scatters its pixels into place; a pass with no pixels in a tiny image has no
+rows at all, not empty ones, which the PngSuite's 1x1 to 9x9 images check.
+
+The test needs Pillow, the one outside dependency in the repo, used only as
+a second reader. Pillow clips 16-bit gray when converting to RGBA and has no
+alpha for gray with tRNS, so gray is compared as raw samples with the
+transparency key checked on its own. The PngSuite, by Willem van Schaik, is
+in `pngsuite/` under its own licence, which allows copying.
+
+Eleven breakages fail the test: Paeth's tie order, the average not halved,
+two Adam7 passes swapped, sub-byte pixels read in the wrong bit order, no
+filters written, the sum read unsigned, CRCs not checked, tRNS dropped from
+rewrites, palette alpha ignored, data after the last row allowed, and
+palette indexes past the end let through. Two of my first expectations were
+wrong, not the code: PngSuite's xcsn0g01 has a bad chunk CRC, not a bad
+zlib checksum, and on the falling ramp the right filter after the first row
+is Up, whose difference is -1, not Sub's -3.
+
+Rewriting is slow at `-9`: the ray tracer's render takes 11 seconds at the
+default level 6 and over a minute at 9, all of it in this repo's LZ77 search,
+for 141,723 bytes instead of 148,470.

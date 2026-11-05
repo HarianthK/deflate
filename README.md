@@ -40,6 +40,14 @@ patterns than the rare ones.
   `zipfile` and Windows' `tar` read what it writes, it reads what they and
   `git archive` write, and it refuses names that would extract outside the
   folder.
+- PNG, in `png.py`: reading any PNG (all five colour types, every bit
+  depth, Adam7 interlacing), rewriting it smaller, checking it as `pngcheck`
+  does, and decoding it to Netpbm. All 161 images of the PngSuite read as
+  Pillow reads them and all 14 broken ones are refused with a reason; the
+  rewrites are 13% smaller than the suite's own files and Pillow reads each
+  as the same pixels. The ray tracer's 640x360 render, written with no
+  filters, goes from 195,604 bytes to 148,470, against 138,286 from Pillow's
+  `optimize=True`.
 
 ## How it compares
 
@@ -75,6 +83,10 @@ gap turned out to be a level mismatch, not block splitting.
     python pkzip.py OUT.zip FILE|DIR... [-1..-9]
     python pkzip.py -l | -t | -x ARCHIVE.zip [-d DIR]
     python test_pkzip.py
+    python png.py IN.png [-o OUT.png] [-1..-9]   # rewrite smaller; left alone if it would not be
+    python png.py -i FILE.png ...                # check every CRC and decode, one line a file
+    python png.py -d IN.png [-o OUT.pam]         # to PGM, PPM or PAM, with tRNS as alpha
+    python test_png.py                           # needs Pillow, as the second opinion
 
 ## Notes
 
