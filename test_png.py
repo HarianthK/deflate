@@ -107,18 +107,30 @@ print("all 14 broken suite files and 9 other breakages refused, each with its re
 
 # Rewriting: PIL reads every rewrite as the same pixels, with the ancillary chunks kept and no interlacing.
 ours = theirs = 0
+converted = []
 for f in GOOD:
     data = open(f, "rb").read()
     out = png.write(read[f])
+    assert len(out) <= len(png.encode(read[f])), f  # a palette only when it is smaller
     assert pil_pixels(out) == pil_pixels(data), f"{os.path.basename(f)}: the rewrite reads back differently"
     again = png.read(out)
-    assert again.rows == read[f].rows and not again.interlaced, f
+    assert not again.interlaced, f
     kept = [k for k, _ in read[f].before + read[f].after]
-    assert [k for _, k, _ in png.chunks(out)] == [b"IHDR"] + [k for k, _ in read[f].before] + [b"IDAT"] + [
-        k for k, _ in read[f].after] + [b"IEND"], f
+    before = [k for k, _ in read[f].before]
+    if again.color == 3 and read[f].color != 3:
+        # Turned into a palette: same pixels by our reader too, the old PLTE and tRNS replaced by new ones.
+        converted.append(os.path.basename(f))
+        assert as_pil_sees(again) == as_pil_sees(read[f]), f
+        before = [k for k in before if k not in (b"PLTE", b"tRNS")] + [b"PLTE"] + (
+            [b"tRNS"] if any(k == b"tRNS" for _, k, _ in png.chunks(out)) else [])
+        assert again.depth == next(d for d in (1, 2, 4, 8) if len(dict(again.before)[b"PLTE"]) // 3 <= 1 << d), f
+    else:
+        assert again.rows == read[f].rows, f
+    assert [k for _, k, _ in png.chunks(out)] == [b"IHDR"] + before + [b"IDAT"] + [k for k, _ in read[f].after] + [b"IEND"], f
     assert b"gAMA" in kept or not any(k == b"gAMA" for _, k, _ in png.chunks(data)), f
     ours, theirs = ours + len(out), theirs + len(data)
-print(f"all {len(GOOD)} rewritten and read back by PIL as the same pixels: {ours} bytes against the suite's {theirs}")
+print(f"all {len(GOOD)} rewritten and read back by PIL as the same pixels: {ours} bytes against the suite's {theirs}, "
+      f"{len(converted)} of them as palettes")
 
 # The filters earn their place: a smooth gradient shrinks far more with them than with none.
 gradient = png.Png(64, 64, 2, 8, False, [[(x * 4 + y) & 255 for x in range(64) for _ in range(3)] for y in range(64)], [], [])
@@ -130,6 +142,36 @@ print(f"a gradient takes {len(png.write(gradient))} bytes filtered, against {len
 ramp = png.Png(40, 4, 0, 8, False, [[200 - 3 * x - y for x in range(40)] for y in range(4)], [], [])
 body = b"".join(b for _, k, b in png.chunks(png.write(ramp)) if k == b"IDAT")
 assert zlib.decompress(body)[::41] == b"\1\2\2\2", zlib.decompress(body)[::41]
+
+# Palettes, worked by hand: red, clear, green and half-see-through blue, in that order. The two
+# see-through colours go first, in the order met, so tRNS is two bytes; four colours fit in 2 bits.
+red, clear, green, blue = (255, 0, 0, 255), (0, 0, 0, 0), (0, 255, 0, 255), (0, 0, 255, 128)
+# The rest of the 64x64 is scattered, so RGBA compresses badly and the palette wins.
+scatter = [(red, clear, green, blue)[(x * 7 + y * 13 + x * y) % 4] for y in range(64) for x in range(64)]
+scatter[:4] = [red, clear, green, blue]
+stripes = png.Png(64, 64, 6, 8, False, [[s for c in scatter[64 * y:64 * y + 64] for s in c] for y in range(64)], [], [])
+assert png.to_palette(stripes).before == [(b"PLTE", bytes([0, 0, 0, 0, 0, 255, 255, 0, 0, 0, 255, 0])), (b"tRNS", b"\x00\x80")]
+small = png.read(png.write(stripes))
+assert (small.color, small.depth) == (3, 2), (small.color, small.depth)
+assert small.rows[0][:4] == [2, 0, 3, 1], small.rows[0][:4]
+# A colour image may carry a suggested palette of its own; the real one replaces it, not joins it.
+suggested = png.write(stripes._replace(before=[(b"PLTE", bytes(6))]))
+assert [k for _, k, _ in png.chunks(suggested)] == [b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND"], suggested[:80]
+# 257 colours cannot be a palette, and an RGB bKGD has no palette spelling, so both stay as they are.
+many = png.Png(257, 1, 2, 8, False, [[s for i in range(257) for s in (i % 256, i // 256, 0)]], [], [])
+assert png.read(png.write(many)).color == 2
+assert png.read(png.write(stripes._replace(before=[(b"bKGD", bytes(6))]))).color == 6
+# A chart drawn with six flat colours, the kind of image this is for: well under half the truecolour file.
+chart = Image.new("RGB", (320, 200), "white")
+for i, colour in enumerate(["#3465a4", "#cc0000", "#4e9a06", "#edd400", "#75507b", "#555753"]):
+    chart.paste(colour, (20 + 48 * i, 160 - 20 * i, 56 + 48 * i, 170))
+buf = io.BytesIO()
+chart.save(buf, "PNG")
+image = png.read(buf.getvalue())
+packed = png.write(image)
+assert png.read(packed).color == 3 and len(packed) * 2 < len(png.encode(image)), (len(packed), len(png.encode(image)))
+assert pil_pixels(packed) == pil_pixels(buf.getvalue())
+print(f"palettes: stripes as worked by hand, a six-colour chart in {len(packed)} bytes against {len(png.encode(image))} as RGB")
 
 # Netpbm: PGM and PPM as PIL reads them; PAM, which PIL cannot read, against PIL's RGBA.
 for name in ("basn0g16", "basn2c08", "tbrn2c08", "basn3p04", "tp1n3p08", "basn4a08"):

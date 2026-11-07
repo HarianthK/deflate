@@ -168,7 +168,43 @@ def chunk(kind, body):
     return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
 
 
+def to_palette(image):
+    # An 8-bit colour image with 256 colours or fewer, as a palette image with the same pixels; else None.
+    # bKGD, sBIT and hIST are spelt differently for palettes, so an image with them is left as it is.
+    names = {k for k, _ in image.before + image.after}
+    if image.color not in (2, 6) or image.depth != 8 or names & {b"bKGD", b"sBIT", b"hIST"}:
+        return None
+    n, _, rows = pixels(image)
+    seen = {}
+    for row in rows:
+        for x in range(0, len(row), n):
+            seen[tuple(row[x:x + n])] = None
+            if len(seen) > 256:
+                return None
+    # Opaque colours lose their alpha; see-through ones go first, so tRNS can stop at the last of them.
+    colours = sorted(seen, key=lambda c: n == 4 and c[3] == 255)
+    index = {c: i for i, c in enumerate(colours)}
+    alphas = bytes(c[3] for c in colours if n == 4 and c[3] < 255)
+    depth = next(d for d in (1, 2, 4, 8) if len(colours) <= 1 << d)
+    plte = bytes(s for c in colours for s in c[:3])
+    # A colour image may carry a suggested PLTE of its own; the real one replaces it.
+    before = [(k, b) for k, b in image.before if k not in (b"tRNS", b"PLTE")] + [(b"PLTE", plte)] + ([(b"tRNS", alphas)] if alphas else [])
+    out = [[index[tuple(row[x:x + n])] for x in range(0, len(row), n)] for row in rows]
+    return Png(image.width, image.height, 3, depth, False, out, before, image.after)
+
+
 def write(image, level=6):
+    # The smaller of the image as it is and as a palette, when it has few enough colours to be one.
+    best = encode(image, level)
+    small = to_palette(image)
+    if small:
+        other = encode(small, level)
+        if len(other) < len(best):
+            best = other
+    return best
+
+
+def encode(image, level=6):
     # Always without interlacing: it only ever costs bytes, and buys a blurry preview while loading.
     channels = CHANNELS[image.color]
     bpp = max(1, channels * image.depth // 8)

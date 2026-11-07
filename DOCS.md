@@ -375,3 +375,38 @@ is Up, whose difference is -1, not Sub's -3.
 Rewriting is slow at `-9`: the ray tracer's render takes 11 seconds at the
 default level 6 and over a minute at 9, all of it in this repo's LZ77 search,
 for 141,723 bytes instead of 148,470.
+
+### A palette when the colours are few
+
+A chart, a diagram or a screenshot of an app often has only a handful of
+colours, yet it is saved as RGB or RGBA: three or four bytes a pixel, where
+one index into a palette would do, or half a byte for up to 16 colours. A
+rewrite now counts the colours of any 8-bit RGB or RGBA image. If there are
+256 or fewer, it also writes the image as a palette and keeps whichever file
+is smaller. On a small image, the PLTE and tRNS chunks can cost more than
+they save.
+
+The palette has to give back exactly the same pixels:
+
+- See-through colours come first, because tRNS lists alphas in palette
+  order and may stop early; every colour after it is opaque.
+- An RGB image whose tRNS names one colour as transparent gets that
+  colour's alpha as 0 in the new tRNS.
+- The index takes the fewest bits that hold the count: 1, 2, 4 or 8.
+- A colour image can carry a PLTE of its own, a suggested palette for
+  displays with few colours. The real palette replaces it; two PLTE chunks
+  would make the file invalid.
+- bKGD, sBIT and hIST are written differently for palette images (an index,
+  three bytes, and one count per entry), so an image that has any of them
+  is left as it was rather than translated.
+
+Only one PngSuite image comes out smaller as a palette: the suite is mostly
+tiny or many-coloured. On a 640x400 bar chart drawn by Pillow, with six bar
+colours and 1-bit text, the RGB file goes from 2,098 bytes to 1,006 and the
+RGBA one from 2,413 to 1,019. Pillow's own `optimize=True` gives 1,761 and
+2,043. The test works one 64x64 four-colour image out by hand: its PLTE, its
+two-byte tRNS, its 2-bit depth and its first indexes. It also checks that
+257 colours and a bKGD each stay truecolour, that a chart shrinks to under
+half, and that no rewrite is ever bigger than the truecolour encoding. Seven
+breakages each fail it. One, the suggested PLTE kept alongside the new one,
+passed until its own check was added.

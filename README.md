@@ -45,7 +45,8 @@ patterns than the rare ones.
   does, and decoding it to Netpbm. All 161 images of the PngSuite read as
   Pillow reads them and all 14 broken ones are refused with a reason; the
   rewrites are 13% smaller than the suite's own files and Pillow reads each
-  as the same pixels. The ray tracer's 640x360 render, written with no
+  as the same pixels. An RGB or RGBA image with 256 colours or fewer is
+  also tried as a palette, which halves a flat-coloured chart. The ray tracer's 640x360 render, written with no
   filters, goes from 195,604 bytes to 148,470, against 138,286 from Pillow's
   `optimize=True`.
 
