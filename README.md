@@ -85,6 +85,7 @@ gap turned out to be a level mismatch, not block splitting.
     python pkzip.py -l | -t | -x ARCHIVE.zip [-d DIR]
     python test_pkzip.py
     python png.py IN.png [-o OUT.png] [-1..-9]   # rewrite smaller; left alone if it would not be
+    python png.py IN.png --strip [-o OUT.png]    # also drop text and time chunks: author, comments, dates
     python png.py -i FILE.png ...                # check every CRC and decode, one line a file
     python png.py -d IN.png [-o OUT.pam]         # to PGM, PPM or PAM, with tRNS as alpha
     python test_png.py                           # needs Pillow, as the second opinion

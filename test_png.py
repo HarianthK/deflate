@@ -190,6 +190,32 @@ for name in ("basn0g16", "basn2c08", "tbrn2c08", "basn3p04", "tp1n3p08", "basn4a
             "RGB" if pam.startswith(b"P6") else Image.open(f).mode).getdata()), name
 print("decoded to PGM, PPM and PAM, matching PIL")
 
+# --strip: no text or time chunk survives, every other chunk keeps its place, and PIL sees the same pixels.
+def names(data):
+    out, pos = [], 8
+    while pos < len(data):
+        n = struct.unpack(">I", data[pos:pos + 4])[0]
+        out.append(data[pos + 4:pos + 8])
+        pos += 12 + n
+    return out
+
+
+DROPPED = {b"tEXt", b"zTXt", b"iTXt", b"tIME"}
+for f in GOOD:
+    data = open(f, "rb").read()
+    out = png.encode(png.strip(png.read(data)))
+    want = [k for i, k in enumerate(names(data)) if k not in DROPPED and not (k == b"IDAT" and names(data)[i - 1] == b"IDAT")]
+    assert names(out) == want, (f, names(out), want)
+    assert pil_pixels(out) == pil_pixels(data), f
+# PngSuite carries 8 tEXt, 30 iTXt, 4 zTXt and 3 tIME, so every kind was tried.
+gone = [k for f in GOOD for k in names(open(f, "rb").read()) if k in DROPPED]
+assert [gone.count(k) for k in (b"tEXt", b"iTXt", b"zTXt", b"tIME")] == [8, 30, 4, 3], len(gone)
+# None of them puts text after the image data, which PNG allows, so one is made: a comment before IEND.
+data = open(GOOD[0], "rb").read()
+late = data[:-12] + struct.pack(">I", 9) + b"tEXt" + b"Comment\0x" + struct.pack(">I", zlib.crc32(b"tEXtComment\0x")) + data[-12:]
+assert b"tEXt" not in names(png.encode(png.strip(png.read(late)))) and b"tEXt" in names(png.encode(png.read(late)))
+print(f"--strip removes {len(gone)} text and time chunks and keeps every pixel and every other chunk")
+
 # From the command line: -i checks files and says which failed, a rewrite leaves a bigger result alone.
 tmp = "t-png.png"
 try:
@@ -203,6 +229,12 @@ try:
     # Rewriting its own output again gains nothing, so the file is left as it was.
     run = subprocess.run([sys.executable, png.__file__, tmp], capture_output=True, text=True)
     assert run.returncode == 0 and "left alone" in run.stdout, run
+    # A plain rewrite keeps the text; --strip drops it, and the gamma that sets the brightness stays.
+    texts = [g for g in GOOD if "ctzn0g04" in g][0]
+    subprocess.run([sys.executable, png.__file__, texts, "-o", tmp], check=True, capture_output=True)
+    assert b"zTXt" in names(open(tmp, "rb").read())
+    subprocess.run([sys.executable, png.__file__, texts, "-o", tmp, "--strip"], check=True, capture_output=True)
+    assert names(open(tmp, "rb").read()) == [b"IHDR", b"gAMA", b"IDAT", b"IEND"], names(open(tmp, "rb").read())
 finally:
     if os.path.exists(tmp):
         os.remove(tmp)

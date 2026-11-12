@@ -1,4 +1,4 @@
-# Run: python png.py IN.png [-o OUT.png] [-1..-9] | -i FILE.png ... | -d IN.png [-o OUT.pam]
+# Run: python png.py IN.png [-o OUT.png] [-1..-9] [--strip] | -i FILE.png ... | -d IN.png [-o OUT.pam]
 # PNG on top of deflate.py: read any PNG, rewrite it smaller, or decode it to Netpbm.
 import math
 import struct
@@ -193,6 +193,15 @@ def to_palette(image):
     return Png(image.width, image.height, 3, depth, False, out, before, image.after)
 
 
+# Chunks that never change a pixel: text (author, comment, software, and so on) and the last edit time.
+METADATA = {b"tEXt", b"zTXt", b"iTXt", b"tIME"}
+
+
+def strip(image):
+    keep = lambda chunks: [(k, b) for k, b in chunks if k not in METADATA]
+    return image._replace(before=keep(image.before), after=keep(image.after))
+
+
 def write(image, level=6):
     # The smaller of the image as it is and as a palette, when it has few enough colours to be one.
     best = encode(image, level)
@@ -268,7 +277,7 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
     args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] != "-o")]
     if not args:
-        sys.exit("usage: python png.py IN.png [-o OUT.png] [-1..-9] | -i FILE.png ... | -d IN.png [-o OUT]")
+        sys.exit("usage: python png.py IN.png [-o OUT.png] [-1..-9] [--strip] | -i FILE.png ... | -d IN.png [-o OUT]")
     if "-i" in argv:
         # As pngcheck: every chunk's CRC and the whole image decoded, one line a file.
         bad = 0
@@ -290,7 +299,7 @@ if __name__ == "__main__":
         open(out, "wb").write(netpbm(image))
         sys.exit(print(f"{source}: {image.width}x{image.height} to {out}"))
     level = next((int(a[1]) for a in argv if len(a) == 2 and a[0] == "-" and a[1] in "123456789"), 6)
-    packed = write(image, level)
+    packed = write(strip(image) if "--strip" in argv else image, level)
     out = argv[argv.index("-o") + 1] if "-o" in argv else source
     if len(packed) >= len(data) and out == source:
         sys.exit(print(f"{source}: {len(data)} bytes, already as small as this makes it; left alone"))

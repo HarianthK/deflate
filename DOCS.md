@@ -410,3 +410,26 @@ two-byte tRNS, its 2-bit depth and its first indexes. It also checks that
 half, and that no rewrite is ever bigger than the truecolour encoding. Seven
 breakages each fail it. One, the suggested PLTE kept alongside the new one,
 passed until its own check was added.
+
+## Stripping what a picture says about itself
+
+A PNG can carry text beside its pixels: an author, a comment, the software
+that made it, a copyright line, in tEXt, zTXt (compressed) or iTXt (UTF-8)
+chunks, plus tIME, the moment it was last edited. None of it changes a pixel,
+and some of it says more than the person sharing the file meant to. `--strip`
+drops those four kinds of chunk and keeps everything else in its place, since
+the rest can change how the picture looks: gAMA and sRGB set its brightness,
+PLTE and tRNS its colours. eXIf is left alone too, because a viewer may turn
+the picture by the orientation in it.
+
+The check rewrites all 161 good PngSuite files stripped and lists each
+output's chunks with its own small reader, not png.py's: they must be the
+original's, minus the four kinds, with the image data in one IDAT, and PIL must
+read the same pixels. The suite carries 8 tEXt, 30 iTXt, 4 zTXt and 3 tIME, so
+every kind is tried. None comes after the image data, which PNG allows, so one
+file is made with a comment just before IEND. On the command line, a plain
+rewrite must keep the text and `--strip` must leave only IHDR, gAMA, IDAT and
+IEND.
+
+Six breakages; all six fail the check. The one that needed the made-up file
+was keeping chunks after the image data: PngSuite alone did not catch it.
