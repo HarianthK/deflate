@@ -488,7 +488,8 @@ def gunzip(data):
     while True:
         part, pos = gunzip_member(data, pos)
         out += part
-        if pos == len(data):
+        # Zero bytes after the last member are padding, as tape and some writers leave; gzip ignores them too.
+        if not data[pos:].strip(b"\0"):
             return out
 
 
@@ -509,7 +510,9 @@ def gzip_header(data, pos):
     # The header is checked for length as it is read: a file cut short there is reported, not crashed on.
     if len(data) < pos + 10:
         raise ValueError("the stream ends early")
-    flags, pos = data[pos + 3], pos + 10
+    start, flags, pos = pos, data[pos + 3], pos + 10
+    if flags & 0xE0:
+        raise ValueError(f"the header sets reserved flag bits 0x{flags & 0xE0:02X}")
     if flags & 4:
         if len(data) < pos + 2:
             raise ValueError("the stream ends early")
@@ -521,6 +524,11 @@ def gzip_header(data, pos):
                 raise ValueError("the stream ends early")
             pos = end + 1
     if flags & 2:
+        # FHCRC: the low 16 bits of the CRC-32 of the header so far.
+        if len(data) < pos + 2:
+            raise ValueError("the stream ends early")
+        if struct.unpack("<H", data[pos:pos + 2])[0] != zlib.crc32(data[start:pos]) & 0xFFFF:
+            raise ValueError("the header CRC does not match the header")
         pos += 2
     return pos
 

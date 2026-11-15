@@ -119,8 +119,11 @@ for label, data in CASES.items():
 # A header with every optional field: extra data, a name, a comment and a header CRC.
 z = zlib.compressobj(6, zlib.DEFLATED, -15)
 body = z.compress(b"fields") + z.flush()
-header = b"\x1f\x8b\x08\x1e" + bytes(6) + b"\x03\x00abc" + b"name\0" + b"comment\0" + b"\0\0"
-assert deflate.gunzip(header + body + struct.pack("<II", zlib.crc32(b"fields"), 6)) == b"fields"
+header = b"\x1f\x8b\x08\x1e" + bytes(6) + b"\x03\x00abc" + b"name\0" + b"comment\0"
+header += struct.pack("<H", zlib.crc32(header) & 0xFFFF)
+fields = header + body + struct.pack("<II", zlib.crc32(b"fields"), 6)
+# zlib checks the header CRC too, so it agrees this one is right.
+assert deflate.gunzip(fields) == zlib.decompress(fields, 31) == b"fields"
 
 
 # Broken input must be refused with a reason, not misread or crashed on.
@@ -165,6 +168,19 @@ broken = bytearray(joined)
 broken[len(gzip.compress(b"first, ")) - 8] ^= 1
 refused(bytes(broken), "trailer", deflate.gunzip)
 refused(joined + b"junk", "offset", deflate.gunzip)
+# Zero padding after the last member is ignored, as Python's gzip and GNU gzip ignore it.
+assert deflate.gunzip(joined + bytes(512)) == gzip.decompress(joined + bytes(512)) == b"first, " + CASES["english"]
+refused(joined + bytes(3) + b"\x01", "offset", deflate.gunzip)
+# A header CRC one bit off in either byte, and a reserved flag bit, are refused; zlib refuses them too.
+for at, bit, reason in ((len(header) - 2, 1, "header CRC"), (len(header) - 1, 0x80, "header CRC"), (3, 0x20, "reserved flag")):
+    bad = bytearray(fields)
+    bad[at] ^= bit
+    refused(bytes(bad), reason, deflate.gunzip)
+    try:
+        zlib.decompress(bytes(bad), 31)
+        raise AssertionError(f"zlib accepted the {reason} change, so the test is wrong")
+    except zlib.error:
+        pass
 
 # Cut short anywhere in its coded data, a stream must be refused, never decoded from the
 # zeros a reader sees past the end. Each of the last 40 bytes is tried as the cut.

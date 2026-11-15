@@ -187,6 +187,15 @@ corrupt first member is caught even when the last one is fine. Anything after
 the last member that is not another member is refused with its offset, rather
 than silently dropped.
 
+Three header rules came later, each matched against a reference. Zero bytes
+after the last member are padding, left by tape blocks and some writers, and are
+ignored, as Python's gzip and GNU gzip ignore them; a zero then anything else is
+still refused. FHCRC, the low 16 bits of the CRC-32 of the header, used to be
+skipped unread; it is now checked, and so are the three reserved flag bits,
+which must be 0. zlib, opened with window bits 31, checks both, and the test
+asks it to agree on the good header and on each broken one, so the test's own
+idea of the CRC is not the only judge. Six breakages fail it.
+
 ## Making the reader fast
 
 The first inflate read one bit at a time and matched codes by looking up
