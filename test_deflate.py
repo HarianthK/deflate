@@ -201,6 +201,31 @@ for _ in range(300):
         deflate.inflate(bytes(bad))
     except ValueError:
         pass
+# Codes zlib never writes, so these are built by hand, and zlib is still the judge of each one.
+# Unused room in a code is corrupt unless the code is empty or one symbol of one bit.
+for label, stream, reason in (
+    ("one distance code of one bit, used", "0dc081000000008020d6fc253e0b", None),
+    ("no distance code, literals only", "05c081080000000020d6fd258e", None),
+    ("only the end-of-block code, one bit", "05c0810800000000207feb03", None),
+    ("one distance code of two bits", "0dc081000000008020d6fc257e13", "leaves room"),
+    ("two distance codes of two bits", "0dc1010100000040a0adfd3f0126", "leaves room"),
+    ("a literal code with a gap", "05c081000000008020d6fc254e", "leaves room"),
+    ("a header code with a gap", "05c031110000000090acfa977002", "leaves room"),
+    ("the unused half of a one-bit distance code", "0dc081000000008020d6fc253e0f", "no code matches"),
+    ("a match with no distance code", "0dc0810c0000008030d6fb4bd42c", "no code matches"),
+    ("fixed distance symbol 30", "4b043e000000", "distance symbol 30 does not exist"),
+    ("fixed distance symbol 31", "4b047e000000", "distance symbol 31 does not exist"),
+):
+    stream, theirs = bytes.fromhex(stream), zlib.decompressobj(-15)
+    if reason is None:
+        assert deflate.inflate(stream)[0] == theirs.decompress(stream) and theirs.eof, label
+        continue
+    refused(stream, reason)
+    try:
+        theirs.decompress(stream)
+        raise AssertionError(f"zlib accepted {label}, so the test is wrong")
+    except zlib.error:
+        pass
 print("inflate read every stream zlib wrote, and refused the broken ones")
 
 # -t from the command line, as gzip -t: OK for a good file, the reason for a bad or missing

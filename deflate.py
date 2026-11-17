@@ -30,7 +30,7 @@ DISTANCE_CODES = [(0, 1, 0), (1, 2, 0), (2, 3, 0), (3, 4, 0), (4, 5, 1), (5, 7, 
                   (29, 24577, 13)]
 CODE_LENGTH_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
 FIXED_LIT_LENGTHS = {s: (8 if s < 144 else 9 if s < 256 else 7 if s < 280 else 8) for s in range(288)}
-FIXED_DIST_LENGTHS = {s: 5 for s in range(30)}
+FIXED_DIST_LENGTHS = {s: 5 for s in range(32)}  # 30 and 31 are in the code but never valid
 
 
 class BitWriter:
@@ -378,8 +378,12 @@ class BitReader:
 def decoder(lengths):
     # Lengths alone rebuild the codes, as canonical() made them; more codes than fit is corrupt.
     lengths = {s: n for s, n in lengths.items() if n}
-    if sum(1 << (15 - n) for n in lengths.values()) > 1 << 15:
+    room = (1 << 15) - sum(1 << (15 - n) for n in lengths.values())
+    if room < 0:
         raise ValueError("a code has more symbols than its lengths leave room for")
+    # zlib's rule: unused room is corrupt too, unless the code is empty or one symbol of one bit.
+    if room and lengths and max(lengths.values()) != 1:
+        raise ValueError("a code leaves room for symbols it does not define")
     # A table indexed by the next `bits` bits as they come off the stream. Codes are sent high
     # bit first into bytes filled from the low end, so each code sits in it reversed.
     bits = max(lengths.values(), default=1)
@@ -455,6 +459,8 @@ def inflate(data, pos=0, history=b""):
             _, base, extra = LENGTH_CODES[symbol - 257]
             length = base + r.read(extra)
             code = read_symbol(r, dist)
+            if code > 29:
+                raise ValueError(f"distance symbol {code} does not exist")
             _, base, extra = DISTANCE_CODES[code]
             distance = base + r.read(extra)
             if distance > len(out):

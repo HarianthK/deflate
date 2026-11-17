@@ -167,7 +167,7 @@ A compressor only ever sees its own data. A decompressor reads whatever it is
 handed, so the reader checks what the writer never had to: a block type of 3,
 a stored length that disagrees with its complement, a table longer than the
 format allows, a run of lengths spilling past the tables, a set of code lengths
-that would need more codes than exist, a match reaching back before the first
+that would need more codes than exist or fewer, a match reaching back before the first
 byte, and a trailer whose CRC or length does not match. Each has a hand-built
 broken stream in the test, and 300 randomly bit-flipped real streams must fail
 with a `ValueError` and nothing else, never an index error from deep inside.
@@ -195,6 +195,44 @@ skipped unread; it is now checked, and so are the three reserved flag bits,
 which must be 0. zlib, opened with window bits 31, checks both, and the test
 asks it to agree on the good header and on each broken one, so the test's own
 idea of the CRC is not the only judge. Six breakages fail it.
+
+### A code with room left over
+
+For a long time the reader checked only one of the two ways a set of code
+lengths can be wrong. Too many codes was refused. Too few, a code with unused
+room, was read as if nothing were the matter, and zlib refuses those as an
+"invalid distances set", "invalid literal/lengths set" or "invalid code lengths
+set". A fuzz that flipped bits in real streams and asked zlib for a second
+verdict found it: a distance code of one symbol two bits long, which this reader
+turned into seven bytes of output.
+
+The rule is now zlib's, from `inflate_table` in its `inftrees.c`. Unused room is
+corrupt, with two exceptions. An empty code is allowed, which is how a block of
+literals alone says it has no distances. So is one symbol sent as one bit, which
+is what RFC 1951 asks for when only one distance is used. In both cases the bit
+patterns that belong to no symbol are still refused if a stream uses them.
+
+zlib is stricter in one place: it does not give the header's own 7-bit code the
+one-bit exception. `decoder` does not single that code out, because a header
+code of one symbol can only say that every length is the same, and no such
+pair of tables is valid, so the stream is refused either way and only the
+message differs.
+
+The fixed distance code had the same gap in it. It is 32 codes of 5 bits, and
+the table held the 30 that mean something, so the new check would have refused
+every fixed block. Symbols 30 and 31 are now in the table, and are refused by
+name if a stream uses them, where zlib says "invalid distance code".
+
+zlib never writes any of this: its writer always sends at least two distance
+codes. So the rule that `inflate` is tested only on what zlib wrote could not
+reach it, and the test has eleven hand-built streams instead, three that must
+be read and eight that must be refused. Each one is also handed to zlib inside
+the test, which has to give the same verdict, so zlib is still the judge. A
+one-off run of 20,000 blocks shaped by hand, with complete, empty, one-symbol,
+short and overfull codes in each of the three places, agreed with zlib on every
+one; the reader before the fix disagreed on 4,133. Eight breakages fail the
+test, among them dropping either exception, which nothing caught before the
+three streams that must be read were added.
 
 ## Making the reader fast
 
