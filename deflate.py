@@ -541,11 +541,25 @@ def gzip_header(data, pos):
 
 if __name__ == "__main__":
     argv = sys.argv[1:]
-    # --dict FILE: a preset dictionary, which only zlib streams (-z, as pigz -z) can carry.
-    dictionary = open(argv.pop(argv.index("--dict") + 1), "rb").read() if "--dict" in argv else None
+
+    def value(flag):
+        # Taken out of argv before the file names are gathered, so it is never read as one.
+        if flag not in argv:
+            return None
+        if argv.index(flag) + 1 == len(argv):
+            sys.exit(f"deflate: {flag} needs a value")
+        return argv.pop(argv.index(flag) + 1)
+
+    output = value("-o")
+    dict_name = value("--dict")
     args = [a for a in argv if not a.startswith("-")]
     if not args:
         sys.exit("usage: python deflate.py FILE [-o OUT] [-1..-9] [--stored|--fixed|--dynamic] [-z [--dict FILE]], -d FILE.gz [-o OUT], -t FILE.gz ..., or -l FILE.gz ...")
+    try:
+        # --dict FILE: a preset dictionary, which only zlib streams (-z, as pigz -z) can carry.
+        dictionary = open(dict_name, "rb").read() if dict_name else None
+    except OSError as e:
+        sys.exit(f"deflate: {e}")
 
     def unpack(raw):
         # Gzip by its magic number, anything else as zlib.
@@ -591,7 +605,7 @@ if __name__ == "__main__":
             data = unpack(raw)
         except (OSError, ValueError) as e:
             sys.exit(f"deflate: {args[0]}: {e}")
-        out = argv[argv.index("-o") + 1] if "-o" in argv else args[0].removesuffix(".gz").removesuffix(".zz")
+        out = output or args[0].removesuffix(".gz").removesuffix(".zz")
         # -N, as gzip's: name the output after the name stored inside the file, in the same folder.
         if "-N" in argv and "-o" not in argv and stored_name(raw):
             out = os.path.join(os.path.dirname(args[0]), stored_name(raw))
@@ -605,8 +619,11 @@ if __name__ == "__main__":
     source = args[0]
     if dictionary is not None and "-z" not in argv:
         sys.exit("deflate: --dict needs -z, since a gzip file has nowhere to name its dictionary")
-    out = argv[argv.index("-o") + 1] if "-o" in argv else source + (".zz" if "-z" in argv else ".gz")
-    data = open(source, "rb").read()
+    out = output or source + (".zz" if "-z" in argv else ".gz")
+    try:
+        data = open(source, "rb").read()
+    except OSError as e:
+        sys.exit(f"deflate: {source}: {e}")
     level = next((int(a[1]) for a in argv if len(a) == 2 and a[0] == "-" and a[1] in "123456789"), 6)
     if "-z" in argv:
         packed = zlib_bytes(data, mode=mode, level=level, dictionary=dictionary or b"")

@@ -166,7 +166,8 @@ byte for byte.
 A compressor only ever sees its own data. A decompressor reads whatever it is
 handed, so the reader checks what the writer never had to: a block type of 3,
 a stored length that disagrees with its complement, a table longer than the
-format allows, a run of lengths spilling past the tables, a set of code lengths
+format allows, a repeat of a length before there is one, a run of lengths
+spilling past the tables, a block with no end-of-block code, a set of code lengths
 that would need more codes than exist or fewer, a match reaching back before the first
 byte, and a trailer whose CRC or length does not match. Each has a hand-built
 broken stream in the test, and 300 randomly bit-flipped real streams must fail
@@ -480,3 +481,11 @@ IEND.
 
 Six breakages; all six fail the check. The one that needed the made-up file
 was keeping chunks after the image data: PngSuite alone did not catch it.
+
+## Option values
+
+`-o OUT` and `--dict FILE` take their value out of the argument list before
+the file names are gathered. Until then only `--dict` did, so `-o OUT FILE`
+compressed OUT, or failed on it, instead of FILE. A bare `-o` at the end, or
+an input file that does not exist, now ends with a one-line message, not a
+traceback.

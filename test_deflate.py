@@ -226,6 +226,39 @@ for label, stream, reason in (
         raise AssertionError(f"zlib accepted {label}, so the test is wrong")
     except zlib.error:
         pass
+
+
+# Broken dynamic-block headers. The code-length code is 0, 16, 17 and 18, two bits each,
+# and each list is (symbol, extra value, extra bits) for 257 literal and 1 distance lengths.
+def dynamic_header(runs, hlit=257, hdist=1):
+    w = deflate.BitWriter()
+    w.write(1, 1)
+    w.write(2, 2)
+    w.write(hlit - 257, 5)
+    w.write(hdist - 1, 5)
+    w.write(0, 4)
+    for _ in range(4):
+        w.write(2, 3)
+    for symbol, extra, bits in runs:
+        w.write_code({0: 0, 16: 1, 17: 2, 18: 3}[symbol], 2)
+        w.write(extra, bits)
+    w.align()
+    return bytes(w.out) + bytes(8)
+
+
+for label, stream, reason in (
+    ("287 literal codes", dynamic_header([], hlit=287), "longer than the format"),
+    ("31 distance codes", dynamic_header([], hdist=31), "longer than the format"),
+    ("a repeat first", dynamic_header([(16, 0, 2)]), "nothing before it"),
+    ("276 lengths for 258", dynamic_header([(18, 127, 7), (18, 127, 7)]), "past the end"),
+    ("every length zero", dynamic_header([(18, 127, 7), (18, 109, 7)]), "no end-of-block"),
+):
+    refused(stream, reason)
+    try:
+        zlib.decompressobj(-15).decompress(stream)
+        raise AssertionError(f"zlib accepted {label}, so the test is wrong")
+    except zlib.error:
+        pass
 print("inflate read every stream zlib wrote, and refused the broken ones")
 
 # -t from the command line, as gzip -t: OK for a good file, the reason for a bad or missing
@@ -263,6 +296,32 @@ finally:
         if os.path.exists(name):
             os.remove(name)
 print("-c writes to standard output, both ways")
+
+# -o's value is the output wherever it sits, never taken for the input; a bare -o is an error.
+open("t-in.txt", "wb").write(good_data)
+try:
+    for order in (["-o", "t-out.gz", "t-in.txt"], ["t-in.txt", "-o", "t-out.gz"]):
+        run = subprocess.run([sys.executable, deflate.__file__] + order, capture_output=True, text=True)
+        assert run.returncode == 0 and gzip.decompress(open("t-out.gz", "rb").read()) == good_data, (order, run)
+        os.remove("t-out.gz")
+    run = subprocess.run([sys.executable, deflate.__file__, "-d", "-o", "t-back.txt", "t-in.txt.gz"], capture_output=True, text=True)
+    assert run.returncode == 1 and "t-in.txt.gz" in run.stderr and not os.path.exists("t-back.txt"), run
+    subprocess.run([sys.executable, deflate.__file__, "t-in.txt"], capture_output=True)
+    run = subprocess.run([sys.executable, deflate.__file__, "-d", "-o", "t-back.txt", "t-in.txt.gz"], capture_output=True, text=True)
+    assert run.returncode == 0 and open("t-back.txt", "rb").read() == good_data, run
+    run = subprocess.run([sys.executable, deflate.__file__, "t-in.txt", "-o"], capture_output=True, text=True)
+    assert run.returncode == 1 and "-o needs" in run.stderr and "Traceback" not in run.stderr, run
+    open("t-dict.bin", "wb").write(good_data[:100])
+    run = subprocess.run([sys.executable, deflate.__file__, "--dict", "t-dict.bin", "-z", "t-in.txt"], capture_output=True, text=True)
+    unpack = zlib.decompressobj(zdict=good_data[:100])
+    assert run.returncode == 0 and unpack.decompress(open("t-in.txt.zz", "rb").read()) == good_data, run
+    run = subprocess.run([sys.executable, deflate.__file__, "t-missing.txt"], capture_output=True, text=True)
+    assert run.returncode == 1 and "t-missing.txt" in run.stderr and "Traceback" not in run.stderr, run
+finally:
+    for name in ("t-in.txt", "t-in.txt.gz", "t-in.txt.zz", "t-dict.bin", "t-out.gz", "t-back.txt"):
+        if os.path.exists(name):
+            os.remove(name)
+print("-o names the output before or after the input")
 
 # -l, as gzip's: sizes from the trailer, the stored name when there is one, and an error, not a
 # crash, for a file that is not gzip at all.
