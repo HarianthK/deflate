@@ -502,3 +502,16 @@ as UTF-8, and anything else as Latin-1. A Latin-1 name with an accent is
 almost never valid UTF-8, so the two seldom collide. The test round-trips both
 names and reads one name written by Python and one written the Linux way;
 going back to UTF-8 on writing, or to Latin-1 only on reading, fails it.
+
+## An end record's signature inside the archive comment
+
+`members` found the end of central directory record by searching back for its
+signature, `PK\x05\x06`, and took the last one. An archive comment that holds
+those four bytes put a false one after the real record, so the archive was
+refused as "not a zip archive". Info-ZIP's unzip and 7-Zip read such an
+archive; Python's zipfile refuses it as pkzip did. Now the search goes on back
+until it finds a record whose comment length runs exactly to the end of the
+file, and falls back to the last signature, as before, when none does. A
+differential run of 400 archives from zipfile, with mixed methods, streamed
+entries, directories and comments, failed 41 times before and none after. The
+test reads one such archive; the old reader fails it.

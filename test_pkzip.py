@@ -73,6 +73,13 @@ try:
             for name, data in files.items():
                 w.writestr(name, data)
         made[label] = buf.getvalue()
+    # A comment holding the end record's own signature: unzip and 7-Zip read past it, Python's zipfile does not.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as w:
+        w.comment = b"PK\x05\x06 looks like an end record"
+        for name, data in files.items():
+            w.writestr(name, data)
+    made["zipfile, the end signature inside its comment"] = buf.getvalue()
 
     class Pipe(io.RawIOBase):
         # A stream zipfile cannot seek back in, so it writes each size after the data (flag bit 3).

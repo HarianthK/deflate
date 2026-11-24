@@ -66,7 +66,12 @@ def gather(paths):
 
 def members(archive):
     # The central directory, found from the end record at the back; it is the archive's real index.
-    at = archive.rfind(END, max(0, len(archive) - 22 - 65535))
+    # The archive's comment may hold the signature too; the real record's comment ends exactly at the end.
+    floor = max(0, len(archive) - 22 - 65535)
+    at = last = archive.rfind(END, floor)
+    while at >= 0 and not (len(archive) >= at + 22 and at + 22 + struct.unpack("<H", archive[at + 20:at + 22])[0] == len(archive)):
+        at = archive.rfind(END, floor, at)
+    at = last if at < 0 else at
     if at < 0 or len(archive) < at + 22:
         raise ValueError("not a zip archive (no end of central directory record)")
     count, size, start = struct.unpack("<HII", archive[at + 10:at + 20])
