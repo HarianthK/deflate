@@ -312,7 +312,9 @@ def gzip_bytes(data, name=None, mode="auto", level=6):
     xfl = 2 if level == 9 else 4 if level == 1 else 0
     header = struct.pack("<BBBBIBB", 0x1F, 0x8B, 8, 8 if name else 0, 0, xfl, 3)
     if name:
-        header += name.encode() + b"\0"
+        # RFC 1952 says Latin-1; a name it cannot spell goes as UTF-8, the bytes gzip on Linux writes.
+        try: header += name.encode("latin-1") + b"\0"
+        except UnicodeEncodeError: header += name.encode() + b"\0"
     return header + deflate(data, mode, level) + struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
 
 
@@ -484,7 +486,11 @@ def stored_name(data):
             return None
         pos += 2 + struct.unpack("<H", data[10:12])[0]
     end = data.find(b"\0", pos)
-    name = os.path.basename(data[pos:end].decode("latin-1").replace("\\", "/")) if end >= 0 else ""
+    raw = data[pos:end] if end >= 0 else b""
+    # Valid UTF-8 is read as UTF-8 (gzip on Linux), anything else as the Latin-1 the RFC asks for.
+    try: text = raw.decode("utf-8")
+    except UnicodeDecodeError: text = raw.decode("latin-1")
+    name = os.path.basename(text.replace("\\", "/"))
     return name if name not in ("", ".", "..") else None
 
 

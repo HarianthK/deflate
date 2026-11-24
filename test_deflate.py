@@ -1,5 +1,6 @@
 # Run: python test_deflate.py. What we write, someone else's code reads; what we read, theirs wrote.
 import gzip
+import io
 import os
 import random
 import struct
@@ -354,6 +355,16 @@ try:
     assert run.returncode == 0 and os.path.exists(made[3]), run
     assert not os.path.exists(os.path.join(os.path.dirname(here), "t-evil.txt")), "-N wrote outside the folder"
     assert deflate.stored_name(gzip.compress(b"x")) is None and deflate.stored_name(b"") is None
+    # Names outside ASCII come back as they went in: ours, Python's (Latin-1) and gzip on Linux's (UTF-8).
+    for name in ("café.txt", "日本.txt"):
+        assert deflate.stored_name(deflate.gzip_bytes(b"x", name=name)) == name, name
+    assert deflate.gzip_bytes(b"x", name="café.txt")[10:19] == b"caf\xe9.txt\0"
+    python_made = io.BytesIO()
+    with gzip.GzipFile(filename="café.txt", mode="wb", fileobj=python_made) as f:
+        f.write(b"x")
+    assert deflate.stored_name(python_made.getvalue()) == "café.txt"
+    linux = b"\x1f\x8b\x08\x08" + bytes(6) + "café.txt".encode() + b"\0" + gzip.compress(b"x")[10:]
+    assert deflate.stored_name(linux) == "café.txt" and deflate.gunzip(linux) == b"x"
 finally:
     for name in made + [os.path.join(os.path.dirname(here), "t-evil.txt")]:
         if os.path.exists(name):

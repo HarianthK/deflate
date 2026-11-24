@@ -489,3 +489,16 @@ the file names are gathered. Until then only `--dict` did, so `-o OUT FILE`
 compressed OUT, or failed on it, instead of FILE. A bare `-o` at the end, or
 an input file that does not exist, now ends with a one-line message, not a
 traceback.
+
+## File names outside ASCII
+
+The gzip header's FNAME field is Latin-1 by RFC 1952, and `stored_name` read
+it that way, but `gzip_bytes` wrote the name as UTF-8. So `café.txt`
+compressed here and restored with `-d -N` came back as `cafÃ©.txt`. Names are
+now written in Latin-1, as Python's gzip module writes them, and a name
+Latin-1 cannot spell, such as `日本.txt`, goes as UTF-8, the bytes gzip on
+Linux writes for any name. On reading, bytes that are valid UTF-8 are taken
+as UTF-8, and anything else as Latin-1. A Latin-1 name with an accent is
+almost never valid UTF-8, so the two seldom collide. The test round-trips both
+names and reads one name written by Python and one written the Linux way;
+going back to UTF-8 on writing, or to Latin-1 only on reading, fails it.
