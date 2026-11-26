@@ -318,8 +318,15 @@ try:
     assert run.returncode == 0 and unpack.decompress(open("t-in.txt.zz", "rb").read()) == good_data, run
     run = subprocess.run([sys.executable, deflate.__file__, "t-missing.txt"], capture_output=True, text=True)
     assert run.returncode == 1 and "t-missing.txt" in run.stderr and "Traceback" not in run.stderr, run
+    # An output that cannot be written is one line, both ways; a file that grows says larger.
+    for flags in (["t-in.txt"], ["-d", "t-in.txt.gz"]):
+        run = subprocess.run([sys.executable, deflate.__file__, *flags, "-o", "t-no-dir/out"], capture_output=True, text=True)
+        assert run.returncode == 1 and "t-no-dir" in run.stderr and "Traceback" not in run.stderr, (flags, run)
+    open("t-tiny.txt", "wb").write(b"hello\n")
+    run = subprocess.run([sys.executable, deflate.__file__, "t-tiny.txt", "-o", "t-out.gz"], capture_output=True, text=True)
+    assert "% larger" in run.stdout and "-" not in run.stdout.split("(")[1], run.stdout
 finally:
-    for name in ("t-in.txt", "t-in.txt.gz", "t-in.txt.zz", "t-dict.bin", "t-out.gz", "t-back.txt"):
+    for name in ("t-in.txt", "t-in.txt.gz", "t-in.txt.zz", "t-dict.bin", "t-dict.bin.zz", "t-out.gz", "t-back.txt", "t-tiny.txt"):
         if os.path.exists(name):
             os.remove(name)
 print("-o names the output before or after the input")

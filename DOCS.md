@@ -515,3 +515,17 @@ file, and falls back to the last signature, as before, when none does. A
 differential run of 400 archives from zipfile, with mixed methods, streamed
 entries, directories and comments, failed 41 times before and none after. The
 test reads one such archive; the old reader fails it.
+
+## An output that cannot be written, and a file that grows
+
+Reading errors were caught, but writing the result was not, so `-o` naming a
+folder that does not exist ended in a traceback, packing and unpacking alike.
+Both writes now go through one `write()` that prints `deflate: PATH: reason`
+and exits with 1. The summary also worked out "smaller" as a signed number, so
+a six-byte file that the headers grow to 32 bytes said "-433.3% smaller"; it
+now says "433.3% larger".
+
+`t-dict.bin.zz`, an output from an earlier version of the `--dict` test, had
+been committed by mistake. It is gone, and the test's cleanup list now names it
+along with the new `t-tiny.txt`. `test_deflate.py` checks both unwritable
+outputs and the "larger" wording, and fails on the old code.

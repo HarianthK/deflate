@@ -603,6 +603,11 @@ if __name__ == "__main__":
                 shown = os.path.join(os.path.dirname(name), stored_name(raw))
             print(f"{len(raw):>10} {size:>12} {ratio:5.1f}%  {shown}")
         sys.exit(1 if bad else 0)
+    def write(out, data):
+        try:
+            open(out, "wb").write(data)
+        except OSError as e:
+            sys.exit(f"deflate: {out}: {e}")
     # -c, as gzip's: the bytes go to standard output and nothing else is printed, so it pipes.
     to_stdout = "-c" in argv
     if "-d" in argv:
@@ -619,7 +624,7 @@ if __name__ == "__main__":
             sys.exit("deflate: give -o, since the output would overwrite the input")
         if to_stdout:
             sys.exit(sys.stdout.buffer.write(data) and 0)
-        open(out, "wb").write(data)
+        write(out, data)
         sys.exit(print(f"{args[0]}: {len(data)} bytes to {out}"))
     mode = "stored" if "--stored" in argv else "fixed" if "--fixed" in argv else "dynamic" if "--dynamic" in argv else "auto"
     source = args[0]
@@ -637,6 +642,7 @@ if __name__ == "__main__":
         packed = gzip_bytes(data, name=source.replace("\\", "/").split("/")[-1], mode=mode, level=level)
     if to_stdout:
         sys.exit(sys.stdout.buffer.write(packed) and 0)
-    open(out, "wb").write(packed)
-    ratio = 100 * (1 - len(packed) / len(data)) if data else 0
-    print(f"{source}: {len(data)} -> {len(packed)} bytes ({ratio:.1f}% smaller), {mode} blocks, level {level}")
+    write(out, packed)
+    # Data that does not compress grows by the headers, and "-433% smaller" says that badly.
+    change = 100 * (len(packed) / len(data) - 1) if data else 0
+    print(f"{source}: {len(data)} -> {len(packed)} bytes ({abs(change):.1f}% {'larger' if change > 0 else 'smaller'}), {mode} blocks, level {level}")
